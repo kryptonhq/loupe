@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# Renders the Homebrew cask for a published release and pushes it to the
+# tap repository.
+#
+# Run by the release workflow after the GitHub release goes public,
+# because the checksums have to come from the artifacts people will
+# actually download — computing them from a local build would let a
+# re-upload drift from what the cask claims.
+#
+#   VERSION=0.2.0 TAG=v0.2.0 GH_TOKEN=... TAP_TOKEN=... \
+#     scripts/update-homebrew-tap.sh
+#
+# Two tokens, because they are two different repositories:
+#
+#   GH_TOKEN   reads the release assets from this repository. In CI this
+#              is the workflow's own GITHUB_TOKEN.
+#   TAP_TOKEN  pushes to the tap. Needs `contents: write` there and
+#              nothing anywhere else.
+#
+# Using one token for both would mean granting the tap's token read
+# access here, or relying on this repository staying public — neither of
+# which should be load-bearing.
+
+set -euo pipefail
+
+: "${VERSION:?set VERSION, e.g. 0.2.0}"
+: "${TAG:?set TAG, e.g. v0.2.0}"
+: "${GH_TOKEN:?set GH_TOKEN to read the release assets}"
+: "${TAP_TOKEN:?set TAP_TOKEN with write access to the tap}"
+
+REPO="${REPO:-kryptonhq/loupe}"
+TAP_REPO="${TAP_REPO:-kryptonhq/homebrew-tap}"
+TEMPLATE="$(dirname "$0")/../packaging/homebrew/loupe.rb.template"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# Tauri names macOS bundles "<product>_<version>_<arch>.dmg".
+arm_dmg="Loupe_${VERSION}_aarch64.dmg"
+intel_dmg="Loupe_${VERSION}_x64.dmg"
+
+echo "downloading release assets for $TAG"
+gh release download "$TAG" --repo "$REPO" --dir "$work" \
+  --pattern "$arm_dmg" --pattern "$intel_dmg"
+
+sha_arm="$(shasum -a 256 "$work/$arm_dmg" | cut -d' ' -f1)"
+sha_intel="$(shasum -a 256 "$work/$intel_dmg" | cut -d' ' -f1)"
+
+echo "  $arm_dmg   $sha_arm"
+echo "  $intel_dmg $sha_intel"
+
+sed \
+  -e "s|__VERSION__|${VERSION}|g" \
+  -e "s|__SHA256_ARM__|${sha_arm}|g" \
+  -e "s|__SHA256_INTEL__|${sha_intel}|g" \
+  "$TEMPLATE" > "$work/loupe.rb"
+
+# Fail loudly rather than pushing a cask with an unsubstituted
+# placeholder, which Homebrew would accept and then fail to install.
+if grep -q "__" "$work/loupe.rb"; then
+  echo "error: unsubstituted placeholder in the rendered cask" >&2
+  grep -n "__" "$work/loupe.rb" >&2
+  exit 1
+fi
+
+echo "cloning $TAP_REPO"
+git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$work/tap"
+
+mkdir -p "$work/tap/Casks"
+cp "$work/loupe.rb" "$work/tap/Casks/loupe.rb"
+
+cd "$work/tap"
+git config user.name "loupe-release"
+git config user.email "noreply@krypton.ai"
+
+# Staged before the comparison: on the first release the cask does not
+# exist yet, and `git diff` does not see untracked files — it would
+# report the tree clean and skip the push that matters most.
+git add Casks/loupe.rb
+if git diff --cached --quiet; then
+  echo "cask already up to date at $VERSION"
+  exit 0
+fi
+
+git commit -m "loupe ${VERSION}"
+
+# An empty tap has no branch yet, and a clone of one leaves HEAD unborn.
+# Pushing an explicit refspec works in both cases, and does not assume
+# the tap's default branch is called main.
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+git push origin "HEAD:refs/heads/${branch}"
+
+echo "tap updated to $VERSION on ${branch}"

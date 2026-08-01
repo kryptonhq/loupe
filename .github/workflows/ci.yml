@@ -61,6 +61,16 @@ jobs:
           fi
           echo "All commits are signed off."
 
+  # The three manifests that carry a version drift silently, and the
+  # cost lands at release time when an installer is named after the
+  # wrong one. Checked on every PR so it never gets that far.
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/version.py
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
@@ -139,7 +149,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [dco, rust, web]
+    needs: [dco, version, rust, web]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
