@@ -50,17 +50,23 @@ fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf> {
 /// defaults — the user can always delete the file, and the next save
 /// rewrites it.
 pub fn load(app: &tauri::AppHandle) -> Settings {
-    let Ok(path) = settings_path(app) else {
-        return Settings::default();
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Settings::default();
-    };
-    parse(&text)
+    match settings_path(app) {
+        Ok(path) => read_from(&path),
+        Err(_) => Settings::default(),
+    }
 }
 
-/// Split from `load` so the fallback behaviour can be tested without a
-/// Tauri app handle or a real config directory.
+/// Split from `load` so the fallback behaviour can be tested against a
+/// real file without a Tauri app handle or the user's config directory.
+pub(crate) fn read_from(path: &std::path::Path) -> Settings {
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse(&text),
+        // Missing is the first-run case and is not worth distinguishing
+        // from unreadable: both mean "no preference recorded".
+        Err(_) => Settings::default(),
+    }
+}
+
 pub(crate) fn parse(text: &str) -> Settings {
     serde_json::from_str(text).unwrap_or_default()
 }
@@ -71,7 +77,12 @@ pub(crate) fn parse(text: &str) -> Settings {
 /// leaves the previous settings intact rather than a truncated file that
 /// reads as corrupt on next launch.
 pub fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<()> {
-    let path = settings_path(app)?;
+    write_to(&settings_path(app)?, settings)
+}
+
+/// Split from `save` for the same reason as `read_from`: the write is
+/// the part with a failure mode worth testing.
+pub(crate) fn write_to(path: &std::path::Path, settings: &Settings) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| AppError::Settings(format!("create {}: {e}", dir.display())))?;
@@ -83,7 +94,7 @@ pub fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<()> {
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, json.as_bytes())
         .map_err(|e| AppError::Settings(format!("write {}: {e}", temp.display())))?;
-    std::fs::rename(&temp, &path)
+    std::fs::rename(&temp, path)
         .map_err(|e| AppError::Settings(format!("replace {}: {e}", path.display())))?;
 
     Ok(())
@@ -142,5 +153,104 @@ mod tests {
     fn a_valid_file_is_honoured() {
         assert_eq!(parse(r#"{"theme":"dark"}"#).theme, Theme::Dark);
         assert_eq!(parse(r#"{"theme":"light"}"#).theme, Theme::Light);
+    }
+
+    /// A scratch directory that removes itself, so the file tests below
+    /// leave nothing behind and cannot collide with each other.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            // Nanoseconds plus the test's own name: `cargo test` runs
+            // these in parallel and a shared path would flake.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("loupe-settings-{tag}-{stamp}"));
+            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            TempDir(dir)
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn settings_survive_a_write_and_a_read() {
+        let dir = TempDir::new("roundtrip");
+        let path = dir.join("settings.json");
+
+        write_to(&path, &Settings { theme: Theme::Dark }).expect("write");
+        assert_eq!(read_from(&path).theme, Theme::Dark);
+    }
+
+    #[test]
+    fn writing_creates_the_config_directory() {
+        // First run on a machine that has never opened Loupe: the
+        // directory does not exist yet, and a failure here would mean
+        // the preference silently never persists.
+        let dir = TempDir::new("mkdir");
+        let path = dir.join("nested").join("deeper").join("settings.json");
+
+        write_to(
+            &path,
+            &Settings {
+                theme: Theme::Light,
+            },
+        )
+        .expect("write");
+        assert!(path.exists());
+        assert_eq!(read_from(&path).theme, Theme::Light);
+    }
+
+    #[test]
+    fn a_second_write_replaces_the_first() {
+        let dir = TempDir::new("replace");
+        let path = dir.join("settings.json");
+
+        write_to(&path, &Settings { theme: Theme::Dark }).expect("first");
+        write_to(
+            &path,
+            &Settings {
+                theme: Theme::Light,
+            },
+        )
+        .expect("second");
+
+        assert_eq!(read_from(&path).theme, Theme::Light);
+        // The temporary file is renamed, not left behind.
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "the temp file should not survive a completed write"
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_reads_as_default() {
+        let dir = TempDir::new("missing");
+        assert_eq!(read_from(&dir.join("nothing.json")).theme, Theme::System);
+    }
+
+    #[test]
+    fn a_corrupt_file_on_disk_does_not_stop_the_app() {
+        // The whole point of the fallback: a half-written or hand-edited
+        // file should cost the user their preference, not their app.
+        let dir = TempDir::new("corrupt");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"{\"theme\": ").expect("write corrupt file");
+
+        assert_eq!(read_from(&path).theme, Theme::System);
+
+        // And the next save repairs it.
+        write_to(&path, &Settings { theme: Theme::Dark }).expect("overwrite");
+        assert_eq!(read_from(&path).theme, Theme::Dark);
     }
 }
