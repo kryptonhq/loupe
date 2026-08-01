@@ -86,11 +86,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
       # The cluster-backed tests are #[ignore]d and stay that way here:
       # CI has no cluster, and a test that silently needs one is worse
-      # than a test that is honestly skipped.
+      # than a test that is honestly skipped. Coverage therefore reports
+      # on what the unit tests reach, which is the honest number.
+      #
+      # llvm-cov runs the tests itself, so this is the test step too
+      # rather than a second compile-and-run of the same suite.
       - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: |
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml \
+            --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          flags: rust
+          # A pull request from a fork cannot see the token, and a
+          # contributor's PR should not go red because of it.
+          fail_ci_if_error: false
 
   web:
     name: Frontend
@@ -106,9 +124,17 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm test:coverage
       # `pnpm build` runs tsc first, so this is the typecheck too.
       - run: pnpm build
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/lcov.info
+          flags: frontend
+          fail_ci_if_error: false
 
   ci:
     name: ci

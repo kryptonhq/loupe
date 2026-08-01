@@ -54,13 +54,20 @@ pub(crate) fn age(resource: &impl ResourceExt) -> Option<String> {
     let now = k8s_openapi::jiff::Timestamp::now();
     // Clamped at zero: clock skew between here and the API server
     // shouldn't render as a negative age.
-    let secs = (now.as_second() - created.0.as_second()).max(0);
-    Some(match secs {
+    Some(format_age((now.as_second() - created.0.as_second()).max(0)))
+}
+
+/// The shorthand every age column in the app uses.
+///
+/// Split out so a timestamp that did not come from object metadata — a
+/// Helm release's `last_deployed`, say — renders identically.
+pub(crate) fn format_age(seconds: i64) -> String {
+    match seconds {
         s if s < 60 => format!("{s}s"),
         s if s < 3600 => format!("{}m", s / 60),
         s if s < 86_400 => format!("{}h", s / 3600),
         s => format!("{}d", s / 86_400),
-    })
+    }
 }
 
 pub async fn list_namespaces(session: &Session) -> Result<Vec<NamespaceSummary>> {
@@ -81,6 +88,34 @@ pub async fn list_namespaces(session: &Session) -> Result<Vec<NamespaceSummary>>
         .collect())
 }
 
+fn summarise_pod(pod: Pod) -> PodSummary {
+    let statuses = pod
+        .status
+        .as_ref()
+        .and_then(|s| s.container_statuses.as_ref());
+    let total = statuses.map(|c| c.len()).unwrap_or(0);
+    let ready = statuses
+        .map(|c| c.iter().filter(|c| c.ready).count())
+        .unwrap_or(0);
+    let restarts = statuses
+        .map(|c| c.iter().map(|c| c.restart_count).sum())
+        .unwrap_or(0);
+
+    PodSummary {
+        age: age(&pod),
+        name: pod.name_any(),
+        namespace: pod.namespace().unwrap_or_default(),
+        phase: pod
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.clone())
+            .unwrap_or_else(|| "Unknown".into()),
+        node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
+        ready: format!("{ready}/{total}"),
+        restarts,
+    }
+}
+
 pub async fn list_pods(session: &Session, namespace: Option<String>) -> Result<Vec<PodSummary>> {
     let client = session.client().await?;
     // An absent namespace means "all namespaces", which is what the
@@ -90,36 +125,23 @@ pub async fn list_pods(session: &Session, namespace: Option<String>) -> Result<V
         None => Api::all(client),
     };
     let list = api.list(&ListParams::default()).await?;
+    Ok(list.into_iter().map(summarise_pod).collect())
+}
 
-    Ok(list
+/// Pods scheduled onto one node.
+///
+/// Filtered server-side rather than by listing the cluster and keeping
+/// the matches: on a large cluster the difference is thirty rows versus
+/// thirty thousand.
+pub async fn list_pods_on_node(session: &Session, node: &str) -> Result<Vec<PodSummary>> {
+    let client = session.client().await?;
+    let api: Api<Pod> = Api::all(client);
+    let params = ListParams::default().fields(&format!("spec.nodeName={node}"));
+    Ok(api
+        .list(&params)
+        .await?
         .into_iter()
-        .map(|pod| {
-            let statuses = pod
-                .status
-                .as_ref()
-                .and_then(|s| s.container_statuses.as_ref());
-            let total = statuses.map(|c| c.len()).unwrap_or(0);
-            let ready = statuses
-                .map(|c| c.iter().filter(|c| c.ready).count())
-                .unwrap_or(0);
-            let restarts = statuses
-                .map(|c| c.iter().map(|c| c.restart_count).sum())
-                .unwrap_or(0);
-
-            PodSummary {
-                age: age(&pod),
-                name: pod.name_any(),
-                namespace: pod.namespace().unwrap_or_default(),
-                phase: pod
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.phase.clone())
-                    .unwrap_or_else(|| "Unknown".into()),
-                node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),
-                ready: format!("{ready}/{total}"),
-                restarts,
-            }
-        })
+        .map(summarise_pod)
         .collect())
 }
 
@@ -131,21 +153,10 @@ pub async fn list_nodes(session: &Session) -> Result<Vec<NodeSummary>> {
     Ok(list
         .into_iter()
         .map(|node| {
-            // Roles live in labels, not a field: node-role.kubernetes.io/<role>.
-            let roles: Vec<String> = node
-                .labels()
-                .keys()
-                .filter_map(|k| k.strip_prefix("node-role.kubernetes.io/"))
-                .filter(|r| !r.is_empty())
-                .map(str::to_string)
-                .collect();
-
-            let ready = node
-                .status
-                .as_ref()
-                .and_then(|s| s.conditions.as_ref())
-                .map(|cs| cs.iter().any(|c| c.type_ == "Ready" && c.status == "True"))
-                .unwrap_or(false);
+            // Shared with the node detail view so the list and the page
+            // it opens can never disagree about a node's roles.
+            let roles = crate::cluster::detail::node::roles_of(&node);
+            let ready = crate::cluster::detail::node::is_ready(&node);
 
             let version = node
                 .status

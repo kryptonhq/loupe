@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml"><img src="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://codecov.io/gh/kryptonhq/loupe"><img src="https://codecov.io/gh/kryptonhq/loupe/branch/main/graph/badge.svg" alt="Coverage" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-blue.svg" alt="Apache 2.0" /></a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/pods.png" width="820" alt="Pod list with search, status and restart counts" />
 </p>
 
@@ -33,11 +39,52 @@ require Krypton Runtime to be installed.
 ## What works today
 
 - Kubeconfig context discovery, connecting, and switching cluster
-- Read-only views for nodes, namespaces and pods, with search and paging
+- Views for nodes, namespaces and pods, with search and paging
 - Pod detail: containers and their termination reasons, conditions,
   labels, events, and the manifest
+- Node detail: allocated CPU and memory against what the scheduler has
+  left, taints, pressure conditions, and the pods scheduled there
+- Namespace detail: pod health at a glance, ResourceQuota headroom,
+  finalizers when a namespace will not go away, and everything
+  happening inside it
+- Workloads, networking, config and storage — deployments, statefulsets,
+  daemonsets, jobs, cronjobs, services, ingresses, config maps, secrets,
+  volume claims and the rest — listed with the same columns `kubectl get`
+  prints, because the API server does the printing
+- Any custom resource, discovered from the cluster's own API — a CRD
+  installed a minute ago is browsable without a new build, and shows
+  whatever printer columns its author defined
+- Secrets are described without being disclosed: keys and sizes are
+  shown, values arrive one at a time on request, and the YAML tab
+  redacts them
+- Helm releases read straight from the release secrets: values, rendered
+  manifest, notes and revision history, with no `helm` binary needed
+- Editing: the YAML tab writes back as a full replace, so an object
+  someone else changed underneath you is rejected rather than silently
+  overwritten. Deleting is deliberately not implemented yet
 - Pod logs, streamed live — with container selection, timestamps, and
   `previous` for reading why a crashed container died
+
+<p align="center">
+  <img src="docs/screenshots/services.png" width="820" alt="Service list with the columns kubectl get prints" />
+</p>
+
+<p align="center">
+  <em>Listings use the API server's own printer, so the columns match
+  <code>kubectl get</code> — for built-in kinds and custom resources alike.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/node-detail.png" width="820" alt="Node detail with allocated CPU and memory against allocatable" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/secret-data.png" width="820" alt="Secret keys and sizes with values held back behind a per-key reveal" />
+</p>
+
+<p align="center">
+  <em>A Secret is described without being disclosed.</em>
+</p>
 
 <p align="center">
   <img src="docs/screenshots/pod-yaml.png" width="820" alt="Pod manifest with syntax highlighting" />
@@ -76,7 +123,16 @@ pnpm tauri build
 
 ```bash
 pnpm test                      # frontend unit tests
+pnpm test:coverage             # …with a coverage report
 cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+CI runs `cargo fmt --check` and `cargo clippy -- -D warnings` as well, so
+it is worth running both before pushing:
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 The Rust suite includes tests that need a real cluster. They are ignored
@@ -99,10 +155,11 @@ src/                     React + TypeScript frontend
   components/            Shared UI (Table, Chip, LogViewer, YamlView)
   lib/api.ts             Typed wrappers over the Tauri commands
   lib/highlight.ts       YAML tokenizer for the manifest view
-  pages/                 Context picker, resource lists, pod detail
+  pages/                 Context picker, resource lists, detail views
 src-tauri/
   src/lib.rs             Tauri command surface
-  src/cluster/           kubeconfig, session, resources, detail, logs
+  src/cluster/           kubeconfig, session, resources, detail, logs,
+                         discovery, server-side printing, helm, edit
   src/error.rs           Error type shared across the IPC boundary
 ```
 
@@ -123,13 +180,14 @@ This project follows the
 
 ## Status
 
-Early, and read-only by design until the read path is solid. Next:
+The read path covers the everyday objects; editing exists, deleting does
+not. Next:
 
-- Generic CRD browsing via API discovery
-- Deployments, services, and the rest of the core workloads
-- Helm release listing
+- Detail views that follow ownership — the pods behind a deployment, the
+  endpoints behind a service, the volume behind a claim
 - Multi-cluster (several connected contexts at once)
-- Write operations: scale, delete, apply, exec
+- Deleting, behind a confirmation that names what goes
+- `exec` into a container
 
 ## Licence
 

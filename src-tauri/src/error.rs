@@ -22,6 +22,23 @@ pub enum AppError {
     #[error("not connected to a cluster")]
     NotConnected,
 
+    /// The cluster does not serve the requested kind. Distinct from a
+    /// generic API failure because the fix is different: the CRD is not
+    /// installed, rather than the request being wrong.
+    #[error("{0}")]
+    UnknownResource(String),
+
+    /// The edited YAML cannot be applied as written. Everything this
+    /// covers is caught before the request leaves the machine.
+    #[error("{0}")]
+    InvalidEdit(String),
+
+    /// The object changed in the cluster since it was loaded into the
+    /// editor. Its own kind because the only useful response is to
+    /// reload and re-apply, and the UI can offer exactly that.
+    #[error("{0}")]
+    Conflict(String),
+
     /// The API server rejected or failed the request. Carries the
     /// original message so RBAC denials stay legible to the user.
     #[error("kubernetes: {0}")]
@@ -35,6 +52,9 @@ impl AppError {
             AppError::Kubeconfig(_) => "kubeconfig",
             AppError::UnknownContext(_) => "unknown_context",
             AppError::NotConnected => "not_connected",
+            AppError::UnknownResource(_) => "unknown_resource",
+            AppError::InvalidEdit(_) => "invalid_edit",
+            AppError::Conflict(_) => "conflict",
             AppError::Kube(_) => "kubernetes",
         }
     }

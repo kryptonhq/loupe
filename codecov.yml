@@ -1,0 +1,43 @@
+# Codecov configuration.
+#
+# Coverage is reported, not enforced. The number is useful as a trend and
+# as a prompt on a diff — "this branch is untested" is worth saying out
+# loud — but a hard gate on a young project mostly teaches people to
+# write tests that raise the number rather than tests that catch bugs.
+# Tighten this once the baseline has settled.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# The two suites upload separately and neither knows about the other, so
+# each flag carries its last known value forward when only one job ran.
+# Without this, a frontend-only change would read as a collapse in Rust
+# coverage rather than as no news.
+flags:
+  rust:
+    paths:
+      - src-tauri/
+    carryforward: true
+  frontend:
+    paths:
+      - src/
+    carryforward: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  # Nothing changed, nothing to say.
+  require_changes: true
+
+ignore:
+  # Demo fixtures for browser development, stripped from production
+  # builds — covering them would measure the fixtures, not the app.
+  - "src/dev/**"
+  - "src/test/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"

@@ -7,13 +7,19 @@
 //! rule the in-cluster control plane follows, arrived at from the other
 //! direction.
 
+pub mod data;
 pub mod detail;
+pub mod discovery;
+pub mod edit;
+pub mod helm;
 pub mod logs;
 pub mod resources;
+pub mod table;
 
 use std::sync::Arc;
 
 use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::discovery::Discovery;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -55,6 +61,10 @@ pub struct Session {
 struct Connected {
     client: kube::Client,
     info: ClusterInfo,
+    /// Cached API discovery. Building it costs one request per group
+    /// version — on a cluster with a dozen operators installed that is
+    /// forty round trips, far too many to repeat per listing.
+    discovery: Option<Arc<Discovery>>,
 }
 
 impl Session {
@@ -73,8 +83,44 @@ impl Session {
         self.inner.read().await.as_ref().map(|c| c.info.clone())
     }
 
+    /// The cluster's API surface, built once and reused.
+    pub async fn discovery(&self) -> Result<Arc<Discovery>> {
+        if let Some(cached) = self
+            .inner
+            .read()
+            .await
+            .as_ref()
+            .and_then(|c| c.discovery.clone())
+        {
+            return Ok(cached);
+        }
+        self.refresh_discovery().await
+    }
+
+    /// Rebuilds discovery from the cluster.
+    ///
+    /// Needed because a CRD installed after connecting is invisible to a
+    /// cached discovery, and "I just applied it and Loupe cannot see it"
+    /// is the first thing an operator would hit.
+    pub async fn refresh_discovery(&self) -> Result<Arc<Discovery>> {
+        // Run the discovery walk without holding the lock: it is dozens
+        // of round trips, and blocking every listing behind it would
+        // freeze the UI on a slow cluster.
+        let client = self.client().await?;
+        let discovered = Arc::new(Discovery::new(client).run().await?);
+
+        if let Some(connected) = self.inner.write().await.as_mut() {
+            connected.discovery = Some(discovered.clone());
+        }
+        Ok(discovered)
+    }
+
     async fn set(&self, client: kube::Client, info: ClusterInfo) {
-        *self.inner.write().await = Some(Connected { client, info });
+        *self.inner.write().await = Some(Connected {
+            client,
+            info,
+            discovery: None,
+        });
     }
 
     pub async fn clear(&self) {
@@ -151,6 +197,28 @@ pub async fn connect(session: &Session, context: &str) -> Result<ClusterInfo> {
     };
     session.set(client, info.clone()).await;
     Ok(info)
+}
+
+/// Shared setup for the live-cluster tests spread across this module.
+///
+/// They are ignored by default because they need a reachable cluster,
+/// which neither CI nor a fresh checkout has. Run them against a local
+/// cluster with:
+///
+///   LOUPE_TEST_CONTEXT=orbstack cargo test -- --ignored --nocapture
+#[cfg(test)]
+pub(crate) mod live {
+    use super::*;
+
+    pub(crate) async fn session() -> Session {
+        let context = std::env::var("LOUPE_TEST_CONTEXT")
+            .expect("set LOUPE_TEST_CONTEXT to a context in your kubeconfig");
+        let session = Session::default();
+        connect(&session, &context)
+            .await
+            .unwrap_or_else(|e| panic!("connect to {context}: {e}"));
+        session
+    }
 }
 
 #[cfg(test)]
@@ -245,22 +313,11 @@ contexts:
     }
 
     /// End-to-end against a real cluster: connect, then read.
-    ///
-    /// Ignored by default because it needs a reachable cluster, which
-    /// neither CI nor a fresh checkout has. Run it against a local
-    /// cluster with:
-    ///
-    ///   LOUPE_TEST_CONTEXT=orbstack cargo test -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "requires a reachable cluster; set LOUPE_TEST_CONTEXT"]
     async fn connects_to_a_live_cluster_and_lists_resources() {
-        let context = std::env::var("LOUPE_TEST_CONTEXT")
-            .expect("set LOUPE_TEST_CONTEXT to a context in your kubeconfig");
-
-        let session = Session::default();
-        let info = connect(&session, &context)
-            .await
-            .unwrap_or_else(|e| panic!("connect to {context}: {e}"));
+        let session = live::session().await;
+        let info = session.info().await.expect("connected");
         println!("connected to {} ({})", info.context, info.version);
         assert!(!info.version.is_empty(), "apiserver reported no version");
 

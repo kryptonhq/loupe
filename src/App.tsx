@@ -4,11 +4,14 @@ import { Sidebar, type View } from "./components/Sidebar";
 import { SkeletonBlock } from "./components/Skeleton";
 import { ContextPicker } from "./pages/ContextPicker";
 import { Namespaces, Nodes, Pods } from "./pages/Resources";
+import { Crds } from "./pages/Crds";
+import { KindBrowser } from "./pages/KindBrowser";
+import { Helm } from "./pages/Helm";
 import { api, type ClusterInfo } from "./lib/api";
 
 export default function App() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
-  const [view, setView] = useState<View>("nodes");
+  const [view, setView] = useState<View>({ type: "nodes" });
   // Shown over a live connection when the user wants a different
   // cluster, so switching does not require disconnecting first.
   const [switching, setSwitching] = useState(false);
@@ -72,9 +75,14 @@ export default function App() {
         onDisconnect={disconnect}
       />
       <main className="min-w-0 flex-1">
-        {view === "nodes" && <Nodes />}
-        {view === "namespaces" && <Namespaces />}
-        {view === "pods" && <Pods />}
+        {view.type === "nodes" && <Nodes />}
+        {view.type === "namespaces" && <Namespaces />}
+        {view.type === "pods" && <Pods />}
+        {view.type === "crds" && (
+          <Crds onSelectKind={(entry) => setView({ type: "kind", entry })} />
+        )}
+        {view.type === "kind" && <KindBrowser entry={view.entry} />}
+        {view.type === "helm" && <Helm />}
       </main>
     </div>
   );

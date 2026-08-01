@@ -13,8 +13,12 @@ import {
   type PodSummary,
 } from "../lib/api";
 import { PodDetail } from "./PodDetail";
+import { NodeDetail } from "./NodeDetail";
+import { NamespaceDetail } from "./NamespaceDetail";
 
 export function Nodes() {
+  const [selected, setSelected] = useState<string | null>(null);
+
   const q = useQuery({
     queryKey: ["nodes"],
     queryFn: () => api.listNodes(),
@@ -43,6 +47,10 @@ export function Nodes() {
     { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
   ];
 
+  if (selected) {
+    return <NodeDetail name={selected} onClose={() => setSelected(null)} />;
+  }
+
   return (
     <Panel
       title="Nodes"
@@ -58,12 +66,15 @@ export function Nodes() {
         rowKey={(n) => n.name}
         searchText={(n) => `${n.name} ${n.roles.join(" ")} ${n.version}`}
         empty="No nodes visible."
+        onRowClick={(n) => setSelected(n.name)}
       />
     </Panel>
   );
 }
 
 export function Namespaces() {
+  const [selected, setSelected] = useState<string | null>(null);
+
   const q = useQuery({
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
@@ -81,6 +92,12 @@ export function Namespaces() {
     { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
   ];
 
+  if (selected) {
+    return (
+      <NamespaceDetail name={selected} onClose={() => setSelected(null)} />
+    );
+  }
+
   return (
     <Panel
       title="Namespaces"
@@ -96,6 +113,7 @@ export function Namespaces() {
         rowKey={(n) => n.name}
         searchText={(n) => `${n.name} ${n.phase}`}
         empty="No namespaces visible."
+        onRowClick={(n) => setSelected(n.name)}
       />
     </Panel>
   );
