@@ -85,7 +85,13 @@ impl Session {
 
     /// The cluster's API surface, built once and reused.
     pub async fn discovery(&self) -> Result<Arc<Discovery>> {
-        if let Some(cached) = self.inner.read().await.as_ref().and_then(|c| c.discovery.clone()) {
+        if let Some(cached) = self
+            .inner
+            .read()
+            .await
+            .as_ref()
+            .and_then(|c| c.discovery.clone())
+        {
             return Ok(cached);
         }
         self.refresh_discovery().await

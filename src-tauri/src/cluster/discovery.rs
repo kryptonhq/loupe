@@ -94,7 +94,9 @@ const BUILTIN_GROUPS: [&str; 7] = [
 ];
 
 pub(crate) fn is_builtin(group: &str) -> bool {
-    BUILTIN_GROUPS.contains(&group) || group.ends_with(".k8s.io") || group.ends_with(".kubernetes.io")
+    BUILTIN_GROUPS.contains(&group)
+        || group.ends_with(".k8s.io")
+        || group.ends_with(".kubernetes.io")
 }
 
 /// Resolves a kind to something we can build an `Api` from.
@@ -103,7 +105,10 @@ pub(crate) fn is_builtin(group: &str) -> bool {
 /// after connecting is absent from the cached surface, and "I just
 /// installed it and Loupe cannot see it" would otherwise need a
 /// reconnect to fix.
-pub(crate) async fn resolve(session: &Session, gvk: &GvkRef) -> Result<(ApiResource, ApiCapabilities)> {
+pub(crate) async fn resolve(
+    session: &Session,
+    gvk: &GvkRef,
+) -> Result<(ApiResource, ApiCapabilities)> {
     let key = GroupVersionKind::gvk(&gvk.group, &gvk.version, &gvk.kind);
 
     if let Some(found) = session.discovery().await?.resolve_gvk(&key) {
@@ -114,10 +119,7 @@ pub(crate) async fn resolve(session: &Session, gvk: &GvkRef) -> Result<(ApiResou
         .await?
         .resolve_gvk(&key)
         .ok_or_else(|| {
-            AppError::UnknownResource(format!(
-                "{} is not served by this cluster",
-                describe(gvk)
-            ))
+            AppError::UnknownResource(format!("{} is not served by this cluster", describe(gvk)))
         })
 }
 
@@ -430,7 +432,9 @@ mod tests {
         let resources = list_api_resources(&session).await.expect("discover");
         println!("{} listable kind(s)", resources.len());
         assert!(
-            resources.iter().any(|r| r.kind == "Pod" && r.group.is_empty()),
+            resources
+                .iter()
+                .any(|r| r.kind == "Pod" && r.group.is_empty()),
             "core v1 Pod should always be discovered"
         );
 
@@ -453,7 +457,12 @@ mod tests {
             let objects = list_objects(&session, gvk.clone(), None)
                 .await
                 .unwrap_or_else(|e| panic!("list {}: {e}", candidate.kind));
-            println!("  {}/{}: {} object(s)", candidate.group, candidate.kind, objects.len());
+            println!(
+                "  {}/{}: {} object(s)",
+                candidate.group,
+                candidate.kind,
+                objects.len()
+            );
             if let Some(first) = objects.into_iter().next() {
                 found = Some((candidate, gvk, first));
                 break;
@@ -500,6 +509,9 @@ mod tests {
         .expect_err("a kind the cluster does not serve should fail");
 
         let message = err.to_string();
-        assert!(message.contains("Nonexistent"), "unhelpful error: {message}");
+        assert!(
+            message.contains("Nonexistent"),
+            "unhelpful error: {message}"
+        );
     }
 }

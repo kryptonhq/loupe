@@ -49,7 +49,9 @@ pub(crate) fn to_yaml<T: Serialize>(value: &T) -> Result<String> {
     serde_yaml::to_string(value).map_err(|e| AppError::Kube(format!("render yaml: {e}")))
 }
 
-pub(crate) fn sorted_pairs(map: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+pub(crate) fn sorted_pairs(
+    map: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
     map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
@@ -83,10 +85,14 @@ fn event_view(e: &Event) -> EventView {
             .as_ref()
             .and_then(|s| s.component.clone())
             .or_else(|| e.reporting_component.clone()),
-        object: e.involved_object.name.as_ref().map(|n| match &e.involved_object.kind {
-            Some(k) => format!("{k}/{n}"),
-            None => n.clone(),
-        }),
+        object: e
+            .involved_object
+            .name
+            .as_ref()
+            .map(|n| match &e.involved_object.kind {
+                Some(k) => format!("{k}/{n}"),
+                None => n.clone(),
+            }),
     }
 }
 

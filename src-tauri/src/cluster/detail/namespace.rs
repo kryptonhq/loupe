@@ -248,7 +248,11 @@ mod tests {
         assert_eq!(cpu.used, "0");
         assert_eq!(cpu.hard, "4");
 
-        let pods = views[0].entries.iter().find(|e| e.resource == "pods").unwrap();
+        let pods = views[0]
+            .entries
+            .iter()
+            .find(|e| e.resource == "pods")
+            .unwrap();
         assert_eq!(pods.used, "3");
     }
 
@@ -268,7 +272,9 @@ mod tests {
             .expect("get namespace");
         println!(
             "kube-system: {} pod(s), {:?}, {} quota(s)",
-            detail.pod_count, detail.pods_by_phase, detail.quotas.len()
+            detail.pod_count,
+            detail.pods_by_phase,
+            detail.quotas.len()
         );
 
         assert_eq!(detail.name, "kube-system");

@@ -94,7 +94,9 @@ pub(crate) fn identity_of(doc: &serde_json::Value) -> Result<Identity> {
     Ok(Identity {
         api_version: field(doc, &["apiVersion"]).unwrap_or_default().to_string(),
         kind: field(doc, &["kind"]).unwrap_or_default().to_string(),
-        name: field(doc, &["metadata", "name"]).unwrap_or_default().to_string(),
+        name: field(doc, &["metadata", "name"])
+            .unwrap_or_default()
+            .to_string(),
         namespace: field(doc, &["metadata", "namespace"]).map(str::to_string),
         resource_version: field(doc, &["metadata", "resourceVersion"]).map(str::to_string),
     })
@@ -115,7 +117,11 @@ pub(crate) fn check(target: &EditTarget, found: &Identity) -> Result<()> {
     };
 
     if found.api_version != target.api_version {
-        return Err(mismatch("apiVersion", &target.api_version, &found.api_version));
+        return Err(mismatch(
+            "apiVersion",
+            &target.api_version,
+            &found.api_version,
+        ));
     }
     if found.kind != target.kind {
         return Err(mismatch("kind", &target.kind, &found.kind));

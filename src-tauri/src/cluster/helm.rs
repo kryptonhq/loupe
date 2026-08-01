@@ -83,7 +83,8 @@ pub struct ReleaseDetail {
 /// JSON. Very old releases skipped the compression, so the gzip magic
 /// number decides rather than the Helm version.
 pub(crate) fn decode_release(raw: &[u8]) -> Result<serde_json::Value> {
-    let bad = |what: &str| AppError::Kube(format!("this does not look like a Helm release: {what}"));
+    let bad =
+        |what: &str| AppError::Kube(format!("this does not look like a Helm release: {what}"));
 
     let unwrapped = if raw.starts_with(&[0x1f, 0x8b]) {
         // Already gzip: no base64 layer to peel.
@@ -189,9 +190,9 @@ pub(crate) fn latest_revisions(secrets: &[(String, String, i64)]) -> Vec<(String
         let release = release_name_from(secret_name).unwrap_or_else(|| secret_name.clone());
         let key = (namespace.clone(), release);
 
-        let entry = newest.entry(key).or_insert_with(|| {
-            (namespace.clone(), secret_name.clone(), *revision)
-        });
+        let entry = newest
+            .entry(key)
+            .or_insert_with(|| (namespace.clone(), secret_name.clone(), *revision));
         if *revision > entry.2 {
             *entry = (namespace.clone(), secret_name.clone(), *revision);
         }
@@ -265,7 +266,9 @@ pub async fn list_releases(
     for (ns, secret_name, _) in latest_revisions(&index) {
         let api: Api<Secret> = secrets_api(session.client().await?, Some(&ns));
         let secret = api.get(&secret_name).await?;
-        let Some(raw) = payload(&secret) else { continue };
+        let Some(raw) = payload(&secret) else {
+            continue;
+        };
         // One malformed release should not blank the whole list; a
         // release Loupe cannot parse is better skipped than fatal.
         if let Ok(release) = decode_release(raw) {
@@ -273,7 +276,11 @@ pub async fn list_releases(
         }
     }
 
-    releases.sort_by(|a, b| a.namespace.cmp(&b.namespace).then_with(|| a.name.cmp(&b.name)));
+    releases.sort_by(|a, b| {
+        a.namespace
+            .cmp(&b.namespace)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     Ok(releases)
 }
 
@@ -285,7 +292,9 @@ pub async fn get_release(session: &Session, namespace: &str, name: &str) -> Resu
 
     let mut revisions: Vec<serde_json::Value> = Vec::new();
     for secret in api.list(&params).await?.items {
-        let Some(raw) = payload(&secret) else { continue };
+        let Some(raw) = payload(&secret) else {
+            continue;
+        };
         if let Ok(release) = decode_release(raw) {
             revisions.push(release);
         }
@@ -364,7 +373,9 @@ mod tests {
     /// Encodes a value the way Helm stores it: gzip, then base64.
     fn helm_payload(value: &serde_json::Value) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(&serde_json::to_vec(value).unwrap()).unwrap();
+        encoder
+            .write_all(&serde_json::to_vec(value).unwrap())
+            .unwrap();
         let gzipped = encoder.finish().unwrap();
         base64::engine::general_purpose::STANDARD
             .encode(gzipped)
@@ -426,7 +437,10 @@ mod tests {
         let got = summarise(&json!({"name": "bare", "version": 1}), "default");
         assert_eq!(got.chart, "unknown");
         assert_eq!(got.status, "unknown");
-        assert_eq!(got.namespace, "default", "falls back to the Secret's namespace");
+        assert_eq!(
+            got.namespace, "default",
+            "falls back to the Secret's namespace"
+        );
     }
 
     #[test]
@@ -507,7 +521,10 @@ mod tests {
         let releases = list_releases(&session, None).await.expect("list releases");
         println!("{} release(s)", releases.len());
         for r in &releases {
-            println!("  {}/{} {} rev {} ({})", r.namespace, r.name, r.chart, r.revision, r.status);
+            println!(
+                "  {}/{} {} rev {} ({})",
+                r.namespace, r.name, r.chart, r.revision, r.status
+            );
         }
 
         let Some(first) = releases.first() else {
@@ -537,7 +554,10 @@ mod tests {
         // just asked about.
         assert_eq!(detail.history[0].revision, detail.revision);
         assert!(
-            detail.history.windows(2).all(|w| w[0].revision >= w[1].revision),
+            detail
+                .history
+                .windows(2)
+                .all(|w| w[0].revision >= w[1].revision),
             "history should read backwards in time"
         );
     }

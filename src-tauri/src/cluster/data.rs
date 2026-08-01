@@ -261,9 +261,14 @@ mod tests {
 
         // Helm's release secrets exist on any cluster with a release,
         // and are the largest secrets around — a good subject.
-        let data = get_secret_data(&session, "krypton-system", "sh.helm.release.v1.krypton.v1", vec![])
-            .await
-            .expect("read secret");
+        let data = get_secret_data(
+            &session,
+            "krypton-system",
+            "sh.helm.release.v1.krypton.v1",
+            vec![],
+        )
+        .await
+        .expect("read secret");
 
         println!("type {:?}, keys {:?}", data.type_, key_names(&data));
         assert!(data.redacted);

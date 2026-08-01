@@ -236,13 +236,23 @@ mod tests {
         );
 
         assert_eq!(
-            table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            table
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["Name", "Type", "Selector"]
         );
         // Priority marks the columns kubectl holds back for -o wide.
         assert_eq!(table.columns[2].priority, 1);
-        assert_eq!(table.columns[2].description.as_deref(), Some("label selector"));
-        assert_eq!(table.rows[0].cells, vec!["kube-dns", "ClusterIP", "k8s-app=kube-dns"]);
+        assert_eq!(
+            table.columns[2].description.as_deref(),
+            Some("label selector")
+        );
+        assert_eq!(
+            table.rows[0].cells,
+            vec!["kube-dns", "ClusterIP", "k8s-app=kube-dns"]
+        );
         assert_eq!(table.rows[0].namespace.as_deref(), Some("kube-system"));
     }
 
@@ -342,7 +352,10 @@ mod tests {
         }
         assert!(services.namespaced);
         assert!(
-            services.rows.iter().all(|r| r.cells.len() == services.columns.len()),
+            services
+                .rows
+                .iter()
+                .all(|r| r.cells.len() == services.columns.len()),
             "every row should be as wide as the header"
         );
 
@@ -351,7 +364,11 @@ mod tests {
             .expect("list deployments");
         println!(
             "Deployment columns: {:?}",
-            deployments.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+            deployments
+                .columns
+                .iter()
+                .map(|c| &c.name)
+                .collect::<Vec<_>>()
         );
         // Containers/Images/Selector are wide-only; the pane hides them
         // by default and would show a wall of text if priority were lost.

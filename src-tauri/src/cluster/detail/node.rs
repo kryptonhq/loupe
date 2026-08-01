@@ -159,7 +159,17 @@ pub(crate) fn format_memory(bytes: f64) -> String {
 /// a pod's effective claim is the larger of "the biggest init container"
 /// and "all app containers together" — not their sum. Getting this wrong
 /// overstates every pod that has an init container.
-fn pod_demand(pod: &Pod, field: fn(&k8s_openapi::api::core::v1::ResourceRequirements) -> Option<&std::collections::BTreeMap<String, k8s_openapi::apimachinery::pkg::api::resource::Quantity>>) -> (f64, f64) {
+fn pod_demand(
+    pod: &Pod,
+    field: fn(
+        &k8s_openapi::api::core::v1::ResourceRequirements,
+    ) -> Option<
+        &std::collections::BTreeMap<
+            String,
+            k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+        >,
+    >,
+) -> (f64, f64) {
     let Some(spec) = &pod.spec else {
         return (0.0, 0.0);
     };
@@ -197,7 +207,11 @@ fn pod_demand(pod: &Pod, field: fn(&k8s_openapi::api::core::v1::ResourceRequirem
 /// A Succeeded or Failed pod still exists in the API and still names a
 /// node, but it holds no reservation — counting it would show a node as
 /// full when it is empty.
-fn allocated_from(pods: &[Pod], allocatable_cpu: Option<f64>, allocatable_mem: Option<f64>) -> Vec<ResourceUsage> {
+fn allocated_from(
+    pods: &[Pod],
+    allocatable_cpu: Option<f64>,
+    allocatable_mem: Option<f64>,
+) -> Vec<ResourceUsage> {
     let live: Vec<&Pod> = pods
         .iter()
         .filter(|p| {
@@ -208,7 +222,14 @@ fn allocated_from(pods: &[Pod], allocatable_cpu: Option<f64>, allocatable_mem: O
         })
         .collect();
 
-    let sum = |field: fn(&k8s_openapi::api::core::v1::ResourceRequirements) -> Option<&std::collections::BTreeMap<String, k8s_openapi::apimachinery::pkg::api::resource::Quantity>>| {
+    let sum = |field: fn(
+        &k8s_openapi::api::core::v1::ResourceRequirements,
+    ) -> Option<
+        &std::collections::BTreeMap<
+            String,
+            k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+        >,
+    >| {
         live.iter().fold((0.0, 0.0), |(cpu, mem), p| {
             let (c, m) = pod_demand(p, field);
             (cpu + c, mem + m)
@@ -219,7 +240,9 @@ fn allocated_from(pods: &[Pod], allocatable_cpu: Option<f64>, allocatable_mem: O
     let (lim_cpu, lim_mem) = sum(|r| r.limits.as_ref());
 
     let percent = |used: f64, total: Option<f64>| {
-        total.filter(|t| *t > 0.0).map(|t| (used / t * 100.0).round() as u32)
+        total
+            .filter(|t| *t > 0.0)
+            .map(|t| (used / t * 100.0).round() as u32)
     };
 
     vec![
@@ -229,7 +252,9 @@ fn allocated_from(pods: &[Pod], allocatable_cpu: Option<f64>, allocatable_mem: O
             requests_percent: percent(req_cpu, allocatable_cpu),
             limits: format_cpu(lim_cpu),
             limits_percent: percent(lim_cpu, allocatable_cpu),
-            allocatable: allocatable_cpu.map(format_cpu).unwrap_or_else(|| "—".into()),
+            allocatable: allocatable_cpu
+                .map(format_cpu)
+                .unwrap_or_else(|| "—".into()),
         },
         ResourceUsage {
             name: "Memory".into(),
@@ -263,7 +288,12 @@ pub(crate) fn is_ready(node: &Node) -> bool {
 }
 
 fn quantities(
-    map: Option<&std::collections::BTreeMap<String, k8s_openapi::apimachinery::pkg::api::resource::Quantity>>,
+    map: Option<
+        &std::collections::BTreeMap<
+            String,
+            k8s_openapi::apimachinery::pkg::api::resource::Quantity,
+        >,
+    >,
 ) -> Vec<(String, String)> {
     map.map(|m| m.iter().map(|(k, v)| (k.clone(), v.0.clone())).collect())
         .unwrap_or_default()
@@ -314,7 +344,11 @@ pub async fn get_node(session: &Session, name: &str) -> Result<NodeDetail> {
         addresses: status
             .as_ref()
             .and_then(|s| s.addresses.as_ref())
-            .map(|a| a.iter().map(|a| (a.type_.clone(), a.address.clone())).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|a| (a.type_.clone(), a.address.clone()))
+                    .collect()
+            })
             .unwrap_or_default(),
         os_image: info.map(|i| i.os_image.clone()),
         kernel_version: info.map(|i| i.kernel_version.clone()),
@@ -482,7 +516,10 @@ mod tests {
             name: "c".into(),
             ..Default::default()
         };
-        assert_eq!(pod_demand(&pod("Running", vec![bare], vec![]), |r| r.requests.as_ref()), (0.0, 0.0));
+        assert_eq!(
+            pod_demand(&pod("Running", vec![bare], vec![]), |r| r.requests.as_ref()),
+            (0.0, 0.0)
+        );
     }
 
     #[test]
@@ -550,7 +587,9 @@ mod tests {
             .expect("list pods on node");
         assert_eq!(detail.pod_count, scheduled.len());
         assert!(
-            scheduled.iter().all(|p| p.node.as_deref() == Some(target.name.as_str())),
+            scheduled
+                .iter()
+                .all(|p| p.node.as_deref() == Some(target.name.as_str())),
             "the field selector should return only this node's pods"
         );
 
