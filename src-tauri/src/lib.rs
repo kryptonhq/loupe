@@ -138,6 +138,39 @@ async fn list_objects(
     cluster::discovery::list_objects(session.inner(), resource, namespace).await
 }
 
+/// A listing with the columns `kubectl get` would print, for any kind.
+#[tauri::command]
+async fn list_table(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+) -> Result<cluster::table::ResourceTable> {
+    cluster::table::list_table(session.inner(), resource, namespace).await
+}
+
+#[tauri::command]
+async fn get_config_map_data(
+    session: tauri::State<'_, SharedSession>,
+    namespace: String,
+    name: String,
+) -> Result<cluster::data::ResourceData> {
+    cluster::data::get_config_map_data(session.inner(), &namespace, &name).await
+}
+
+/// A Secret's keys, with values withheld unless `reveal` names them.
+///
+/// Revealing is per key rather than all-or-nothing so checking one value
+/// does not put every credential in the object on screen.
+#[tauri::command]
+async fn get_secret_data(
+    session: tauri::State<'_, SharedSession>,
+    namespace: String,
+    name: String,
+    reveal: Vec<String>,
+) -> Result<cluster::data::ResourceData> {
+    cluster::data::get_secret_data(session.inner(), &namespace, &name, reveal).await
+}
+
 #[tauri::command]
 async fn get_object(
     session: tauri::State<'_, SharedSession>,
@@ -241,7 +274,10 @@ pub fn run() {
             list_api_resources,
             refresh_api_resources,
             list_objects,
+            list_table,
             get_object,
+            get_config_map_data,
+            get_secret_data,
             apply_yaml,
             list_helm_releases,
             get_helm_release,

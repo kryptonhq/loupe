@@ -206,6 +206,46 @@ export interface GvkRef {
   kind: string;
 }
 
+/// A listing rendered by the API server itself — the same columns and
+/// cells `kubectl get` prints, for whatever kind was asked for.
+export interface TableColumn {
+  name: string;
+  /// 0 for columns kubectl shows by default; higher for the ones it
+  /// holds back for `-o wide`.
+  priority: number;
+  description: string | null;
+}
+
+export interface TableRow {
+  name: string;
+  namespace: string | null;
+  cells: string[];
+}
+
+export interface ResourceTable {
+  columns: TableColumn[];
+  rows: TableRow[];
+  namespaced: boolean;
+}
+
+/// One key of a ConfigMap or Secret.
+export interface DataKey {
+  key: string;
+  bytes: number;
+  /// Null when the value is withheld (an unrevealed Secret key) or not
+  /// renderable (binary).
+  value: string | null;
+  binary: boolean;
+}
+
+export interface ResourceData {
+  keys: DataKey[];
+  /// A Secret's type. Null for a ConfigMap.
+  type: string | null;
+  /// True when values are held back until asked for by name.
+  redacted: boolean;
+}
+
 export interface ObjectSummary {
   name: string;
   namespace: string | null;
@@ -345,6 +385,22 @@ export const api = {
     }),
   getObject: (resource: GvkRef, namespace: string | null, name: string) =>
     invoke<ObjectDetail>("get_object", { resource, namespace, name }),
+
+  /// A listing with kubectl's own columns. Works for every kind,
+  /// including CRDs, because the API server does the printing.
+  listTable: (resource: GvkRef, namespace?: string) =>
+    invoke<ResourceTable>("list_table", {
+      resource,
+      namespace: namespace ?? null,
+    }),
+
+  getConfigMapData: (namespace: string, name: string) =>
+    invoke<ResourceData>("get_config_map_data", { namespace, name }),
+
+  /// A Secret's keys. Values come back only for the keys named in
+  /// `reveal`, so checking one does not put the rest on screen.
+  getSecretData: (namespace: string, name: string, reveal: string[] = []) =>
+    invoke<ResourceData>("get_secret_data", { namespace, name, reveal }),
 
   /// Writes an edited object back as a full replace. Rejects an edit
   /// whose identity no longer matches `target`, and one based on a

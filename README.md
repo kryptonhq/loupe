@@ -41,8 +41,16 @@ require Krypton Runtime to be installed.
 - Namespace detail: pod health at a glance, ResourceQuota headroom,
   finalizers when a namespace will not go away, and everything
   happening inside it
+- Workloads, networking, config and storage — deployments, statefulsets,
+  daemonsets, jobs, cronjobs, services, ingresses, config maps, secrets,
+  volume claims and the rest — listed with the same columns `kubectl get`
+  prints, because the API server does the printing
 - Any custom resource, discovered from the cluster's own API — a CRD
-  installed a minute ago is browsable without a new build
+  installed a minute ago is browsable without a new build, and shows
+  whatever printer columns its author defined
+- Secrets are described without being disclosed: keys and sizes are
+  shown, values arrive one at a time on request, and the YAML tab
+  redacts them
 - Helm releases read straight from the release secrets: values, rendered
   manifest, notes and revision history, with no `helm` binary needed
 - Editing: the YAML tab writes back as a full replace, so an object
@@ -111,10 +119,11 @@ src/                     React + TypeScript frontend
   components/            Shared UI (Table, Chip, LogViewer, YamlView)
   lib/api.ts             Typed wrappers over the Tauri commands
   lib/highlight.ts       YAML tokenizer for the manifest view
-  pages/                 Context picker, resource lists, pod detail
+  pages/                 Context picker, resource lists, detail views
 src-tauri/
   src/lib.rs             Tauri command surface
-  src/cluster/           kubeconfig, session, resources, detail, logs
+  src/cluster/           kubeconfig, session, resources, detail, logs,
+                         discovery, server-side printing, helm, edit
   src/error.rs           Error type shared across the IPC boundary
 ```
 
@@ -135,13 +144,14 @@ This project follows the
 
 ## Status
 
-Early, and read-only by design until the read path is solid. Next:
+The read path covers the everyday objects; editing exists, deleting does
+not. Next:
 
-- Generic CRD browsing via API discovery
-- Deployments, services, and the rest of the core workloads
-- Helm release listing
+- Detail views that follow ownership — the pods behind a deployment, the
+  endpoints behind a service, the volume behind a claim
 - Multi-cluster (several connected contexts at once)
-- Write operations: scale, delete, apply, exec
+- Deleting, behind a confirmation that names what goes
+- `exec` into a container
 
 ## Licence
 

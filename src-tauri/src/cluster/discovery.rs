@@ -280,6 +280,15 @@ pub async fn get_object(
 
     let mut obj = api.get(name).await?;
     obj.metadata.managed_fields = None;
+
+    // A Secret's values are base64 in the API, which is an encoding and
+    // not a protection: rendering the YAML as-is would put every
+    // credential on screen. Redacted here rather than in a separate
+    // Secret-only path, so there is no generic route that bypasses it.
+    let redacted = crate::cluster::data::is_secret(&resource.api_version, &resource.kind);
+    if redacted {
+        crate::cluster::data::redact(&mut obj.data);
+    }
     // A DynamicObject fetched through the typed path can come back with
     // no `types`, and YAML without apiVersion/kind is not re-appliable —
     // which matters because the editor round-trips exactly this text.
@@ -298,7 +307,9 @@ pub async fn get_object(
         labels: sorted_pairs(obj.labels()),
         annotations: sorted_pairs(obj.annotations()),
         conditions: conditions_from(&obj.data),
-        editable: caps.supports_operation("update"),
+        // Never offer to apply text whose values have been replaced:
+        // saving it would write the placeholder over the real secret.
+        editable: caps.supports_operation("update") && !redacted,
         name: obj.name_any(),
         namespace: obj.namespace(),
         yaml,

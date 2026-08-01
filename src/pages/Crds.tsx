@@ -5,14 +5,8 @@ import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
 import { Chip } from "../components/Chip";
 import { Select } from "../components/Select";
-import { StatusDot } from "../components/StatusDot";
-import {
-  api,
-  type ApiResourceInfo,
-  type GvkRef,
-  type ObjectSummary,
-} from "../lib/api";
-import { ObjectDetail, statusTone } from "./ObjectDetail";
+import { api, type ApiResourceInfo } from "../lib/api";
+import type { KindEntry } from "../lib/kinds";
 
 // Browsing anything the cluster serves, discovered at runtime.
 //
@@ -122,133 +116,29 @@ function Kinds({
   );
 }
 
-function Objects({
-  resource,
-  onBack,
-}: {
-  resource: ApiResourceInfo;
-  onBack: () => void;
-}) {
-  const [namespace, setNamespace] = useState("");
-  const [selected, setSelected] = useState<ObjectSummary | null>(null);
-
-  const gvk: GvkRef = {
-    group: resource.group,
-    version: resource.version,
-    kind: resource.kind,
-  };
-
-  const q = useQuery({
-    queryKey: ["objects", kindKey(resource), namespace],
-    queryFn: () => api.listObjects(gvk, namespace || undefined),
-    placeholderData: (prev) => prev,
-  });
-
-  const namespaces = useQuery({
-    queryKey: ["namespaces"],
-    queryFn: () => api.listNamespaces(),
-    enabled: resource.namespaced,
-  });
-
-  const columns: Column<ObjectSummary>[] = [
-    { key: "name", header: "Name", render: (o) => o.name },
-    ...(resource.namespaced
-      ? [
-          {
-            key: "namespace",
-            header: "Namespace",
-            render: (o: ObjectSummary) => o.namespace ?? "—",
-          },
-        ]
-      : []),
-    {
-      key: "status",
-      header: "Status",
-      render: (o) =>
-        o.status ? (
-          <StatusDot tone={statusTone(o.status)} label={o.status} />
-        ) : (
-          <span className="text-content-muted">—</span>
-        ),
-    },
-    { key: "age", header: "Age", render: (o) => o.age ?? "—", mono: true },
-  ];
-
-  if (selected) {
-    return (
-      <ObjectDetail
-        resource={gvk}
-        namespace={selected.namespace}
-        name={selected.name}
-        backTo={resource.kind}
-        onClose={() => setSelected(null)}
-      />
-    );
-  }
-
-  return (
-    <Panel
-      title={resource.kind}
-      subtitle={resource.group ? `${resource.group}/${resource.version}` : resource.version}
-      error={q.error}
-      isFetching={q.isFetching && !q.isLoading}
-      onRefresh={() => q.refetch()}
-      actions={
-        <button
-          onClick={onBack}
-          className="rounded-sm border px-2 py-1 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content"
-        >
-          All kinds
-        </button>
-      }
-    >
-      <ResourceTable
-        columns={columns}
-        rows={q.data}
-        isLoading={q.isLoading}
-        rowKey={(o) => `${o.namespace ?? ""}/${o.name}`}
-        searchText={(o) => `${o.name} ${o.namespace ?? ""} ${o.status ?? ""}`}
-        empty={`No ${resource.plural} exist.`}
-        onRowClick={setSelected}
-        toolbar={
-          resource.namespaced && (
-            <Select value={namespace} onChange={setNamespace}>
-              <option value="">All namespaces</option>
-              {(namespaces.data ?? []).map((ns) => (
-                <option key={ns.name} value={ns.name}>
-                  {ns.name}
-                </option>
-              ))}
-            </Select>
-          )
-        }
-      />
-    </Panel>
-  );
-}
-
-/// The chosen kind lives in App, not here, because the sidebar selects
-/// it too — two owners of the same selection would drift apart the
-/// moment one of them changed it.
+/// The index of every kind the cluster serves.
+///
+/// Selection is reported upward rather than held here: the sidebar picks
+/// kinds too, and two owners of one selection drift apart the moment
+/// either changes it.
 export function Crds({
-  resource,
   onSelectKind,
 }: {
-  resource: ApiResourceInfo | null;
-  onSelectKind: (resource: ApiResourceInfo | null) => void;
+  onSelectKind: (entry: KindEntry) => void;
 }) {
-  return resource ? (
-    // Keyed by kind so switching kinds remounts rather than reconciles.
-    // Without it the open object survives the switch — and an Agent
-    // named mcp-hello becomes a request for a Model named mcp-hello,
-    // which 404s. Nothing selected under one kind means anything under
-    // another.
-    <Objects
-      key={kindKey(resource)}
-      resource={resource}
-      onBack={() => onSelectKind(null)}
+  return (
+    <Kinds
+      onSelect={(resource) =>
+        onSelectKind({
+          id: kindKey(resource),
+          label: resource.kind,
+          gvk: {
+            group: resource.group,
+            version: resource.version,
+            kind: resource.kind,
+          },
+        })
+      }
     />
-  ) : (
-    <Kinds onSelect={onSelectKind} />
   );
 }

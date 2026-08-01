@@ -437,6 +437,45 @@ const FIXTURES: Record<string, unknown> = {
       { revision: 1, status: "superseded", chart: "krypton-0.0.2", appVersion: "0.0.2", updated: "44d", description: "Install complete" },
     ],
   },
+  // Server-side printing: the demo returns a Service-shaped table, which
+  // is enough to exercise the browser. A real cluster sends whatever
+  // columns the kind actually has.
+  list_table: {
+    namespaced: true,
+    columns: [
+      { name: "Name", priority: 0, description: null },
+      { name: "Type", priority: 0, description: null },
+      { name: "Cluster-IP", priority: 0, description: null },
+      { name: "Port(s)", priority: 0, description: null },
+      { name: "Age", priority: 0, description: null },
+      { name: "Selector", priority: 1, description: "label selector" },
+    ],
+    rows: [
+      {
+        name: "krypton-gateway",
+        namespace: "krypton-system",
+        cells: ["krypton-gateway", "ClusterIP", "192.168.194.87", "80/TCP", "12d", "app=gateway"],
+      },
+      {
+        name: "krypton-postgres",
+        namespace: "krypton-system",
+        cells: ["krypton-postgres", "ClusterIP", "None", "5432/TCP", "12d", "app=postgres"],
+      },
+      {
+        name: "kube-dns",
+        namespace: "kube-system",
+        cells: ["kube-dns", "ClusterIP", "192.168.194.138", "53/UDP,53/TCP", "65d", "k8s-app=kube-dns"],
+      },
+    ],
+  },
+  get_config_map_data: {
+    type: null,
+    redacted: false,
+    keys: [
+      { key: "Corefile", bytes: 412, binary: false, value: ".:53 {\n    errors\n    health\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa\n    forward . /etc/resolv.conf\n    cache 30\n}\n" },
+      { key: "NodeHosts", bytes: 34, binary: false, value: "198.19.249.2 orbstack\n" },
+    ],
+  },
   disconnect: null,
   // A browser has no native window to make translucent. Without this
   // the fallback `[]` would apply, and an empty array is truthy.
@@ -461,6 +500,55 @@ export function installDemoBridge() {
       // The demo has no cluster to write to, so an apply echoes the
       // edit back. That still exercises the editor's success path —
       // apply, leave edit mode, re-render with what was stored.
+      // The detail view is kind-aware, so the demo has to be too: a
+      // Secret opened from the browser must come back as a Secret, or
+      // the Data tab never appears and the redaction is untestable.
+      if (cmd === "get_object") {
+        const kind = (args.resource as { kind?: string })?.kind ?? "Agent";
+        const name = String(args.name ?? "");
+        const namespace = (args.namespace as string | null) ?? null;
+        if (kind === "Secret" || kind === "ConfigMap") {
+          return Promise.resolve({
+            apiVersion: "v1",
+            kind,
+            name,
+            namespace,
+            age: "12d",
+            status: null,
+            labels: [],
+            annotations: [],
+            conditions: [],
+            // A Secret's YAML is redacted, and redacted YAML must not be
+            // appliable — saving it would overwrite every value.
+            editable: kind !== "Secret",
+            yaml:
+              kind === "Secret"
+                ? `apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\n  resourceVersion: "8812"\ntype: Opaque\ndata:\n  postgres-password: «redacted by Loupe — reveal in the Data tab»\n  tls.crt: «redacted by Loupe — reveal in the Data tab»\n`
+                : `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\n  resourceVersion: "4410"\ndata:\n  Corefile: |\n    .:53 {\n        forward . /etc/resolv.conf\n    }\n`,
+          });
+        }
+        return Promise.resolve(FIXTURES.get_object);
+      }
+
+      // Secrets are described but not disclosed: values arrive only for
+      // the keys named in `reveal`, mirroring the Rust side.
+      if (cmd === "get_secret_data") {
+        const reveal = (args.reveal as string[]) ?? [];
+        const values: Record<string, string> = {
+          "postgres-password": "hunter2",
+          "tls.crt": "-----BEGIN CERTIFICATE-----\nMIIB…\n-----END CERTIFICATE-----\n",
+        };
+        return Promise.resolve({
+          type: "Opaque",
+          redacted: true,
+          keys: Object.entries(values).map(([key, value]) => ({
+            key,
+            bytes: value.length,
+            binary: false,
+            value: reveal.includes(key) ? value : null,
+          })),
+        });
+      }
       if (cmd === "apply_yaml") {
         return Promise.resolve({
           yaml: String(args.yaml ?? ""),

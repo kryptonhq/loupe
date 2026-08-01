@@ -2,16 +2,29 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./Logo";
 import { dragRegionProps } from "../lib/window";
+import { KIND_SECTIONS, type KindEntry } from "../lib/kinds";
 import { api, type ApiResourceInfo, type ClusterInfo } from "../lib/api";
 
-export type View = "nodes" | "namespaces" | "pods" | "crds" | "helm";
+/// Which pane the main area is showing.
+///
+/// `kind` covers everything driven by a server-printed table — the
+/// sidebar's workloads, networking, config and storage entries, and any
+/// custom resource picked from the CRDs section. The rest have views
+/// with more than a table behind them.
+export type View =
+  | { type: "nodes" }
+  | { type: "namespaces" }
+  | { type: "pods" }
+  | { type: "crds" }
+  | { type: "helm" }
+  | { type: "kind"; entry: KindEntry };
 
 // Each resource gets a mark rather than an icon font. The references
 // that read well all use colour to make the left rail scannable — you
 // learn the shape and stop reading the label.
-type Item = { id: View; label: string; tint: string; glyph: string };
+type Item = { id: View["type"]; label: string; tint: string; glyph: string };
 
-const ITEMS: Item[] = [
+const CLUSTER_ITEMS: Item[] = [
   { id: "nodes", label: "Nodes", tint: "text-info", glyph: "▤" },
   { id: "namespaces", label: "Namespaces", tint: "text-accent", glyph: "◇" },
   { id: "pods", label: "Pods", tint: "text-success", glyph: "◉" },
@@ -25,11 +38,48 @@ interface SidebarProps {
   cluster: ClusterInfo | null;
   view: View;
   onSelect: (v: View) => void;
-  /// The CRD whose objects the main pane is showing, if any.
-  crd: ApiResourceInfo | null;
-  onSelectCrd: (resource: ApiResourceInfo | null) => void;
   onSwitchCluster: () => void;
   onDisconnect: () => void;
+}
+
+/// The kind a `kind` view is showing, or null for anything else.
+function selectedKindId(view: View) {
+  return view.type === "kind" ? view.entry.id : null;
+}
+
+/// A nav row for one kind, at the indent the sections use.
+function KindRow({
+  label,
+  active,
+  title,
+  onSelect,
+}: {
+  label: string;
+  active: boolean;
+  title?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      title={title}
+      className={`mb-0.5 flex w-full items-center rounded py-1 pl-8 pr-2 text-left text-sm transition-colors duration-150 ease-swift ${
+        active
+          ? "bg-accent/[0.14] font-medium text-content"
+          : "text-content-secondary hover:bg-content/[0.05] hover:text-content"
+      }`}
+    >
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-2 pb-1 pt-3 text-2xs font-medium uppercase tracking-wide text-content-muted">
+      {children}
+    </p>
+  );
 }
 
 function itemClass(active: boolean) {
@@ -64,24 +114,26 @@ function NavItem({
   );
 }
 
-/// The CRDs section: a nav item that opens into the cluster's own custom
-/// kinds.
+/// The CRDs section: the cluster's own custom kinds.
 ///
-/// Only custom kinds are listed here. The built-ins stay on the index
-/// page — putting all seventy in the rail would bury the two an operator
-/// installed an operator for, which are the ones they came to click.
+/// Collapsible, unlike the fixed sections, because its length is set by
+/// whatever operators are installed — thirteen on a modest cluster, and
+/// far more on a busy one.
+///
+/// Only custom kinds are listed. The built-ins worth a rail entry are
+/// already in the sections above, and the rest are on the index page.
 function CrdSection({
-  active,
-  selected,
+  selectedId,
   enabled,
   onOpenIndex,
-  onSelectCrd,
+  onSelectKind,
+  indexActive,
 }: {
-  active: boolean;
-  selected: ApiResourceInfo | null;
+  selectedId: string | null;
   enabled: boolean;
   onOpenIndex: () => void;
-  onSelectCrd: (resource: ApiResourceInfo) => void;
+  onSelectKind: (entry: KindEntry) => void;
+  indexActive: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -94,14 +146,25 @@ function CrdSection({
     enabled,
   });
 
-  const crds = (q.data ?? []).filter((r) => r.custom);
+  const crds: { entry: KindEntry; resource: ApiResourceInfo }[] = (q.data ?? [])
+    .filter((r) => r.custom)
+    .map((r) => ({
+      resource: r,
+      entry: {
+        id: `${r.group}/${r.version}/${r.kind}`,
+        label: r.kind,
+        gvk: { group: r.group, version: r.version, kind: r.kind },
+      },
+    }));
+
+  const selectedHere = crds.some((c) => c.entry.id === selectedId);
 
   // Arriving at a CRD from somewhere else — the index table, say —
   // should reveal it in the rail, not leave the section shut over the
   // thing that is on screen.
   useEffect(() => {
-    if (selected) setOpen(true);
-  }, [selected]);
+    if (selectedHere) setOpen(true);
+  }, [selectedHere]);
 
   return (
     <>
@@ -112,11 +175,11 @@ function CrdSection({
             onOpenIndex();
           }}
           disabled={!enabled}
-          className={`${itemClass(active && !selected)} mb-0 flex-1`}
+          className={`${itemClass(indexActive)} mb-0 flex-1`}
         >
           <span
             aria-hidden
-            className={`w-3.5 text-center text-xs ${active ? CRD_MARK.tint : "text-content-muted group-hover:" + CRD_MARK.tint}`}
+            className={`w-3.5 text-center text-xs ${indexActive ? CRD_MARK.tint : "text-content-muted group-hover:" + CRD_MARK.tint}`}
           >
             {CRD_MARK.glyph}
           </span>
@@ -148,35 +211,27 @@ function CrdSection({
 
       {open && crds.length > 0 && (
         <ul className="mb-1 animate-fade-in">
-          {crds.map((r, i) => {
-            const isSelected =
-              selected?.kind === r.kind && selected?.group === r.group;
+          {crds.map(({ entry, resource }, i) => {
             // A heading whenever the API group changes. Thirteen kinds
             // from four operators read as four things this way, and as
             // one undifferentiated list without it.
-            const newGroup = i === 0 || crds[i - 1].group !== r.group;
-
+            const newGroup = i === 0 || crds[i - 1].resource.group !== resource.group;
             return (
-              <li key={`${r.group}/${r.version}/${r.kind}`}>
+              <li key={entry.id}>
                 {newGroup && (
                   <p
                     className="truncate px-2 pb-0.5 pl-8 pt-1.5 text-2xs text-content-muted"
-                    title={r.group}
+                    title={resource.group}
                   >
-                    {r.group}
+                    {resource.group}
                   </p>
                 )}
-                <button
-                  onClick={() => onSelectCrd(r)}
-                  title={`${r.group}/${r.version}`}
-                  className={`mb-0.5 flex w-full items-center rounded py-1 pl-8 pr-2 text-left text-sm transition-colors duration-150 ease-swift ${
-                    isSelected
-                      ? "bg-accent/[0.14] font-medium text-content"
-                      : "text-content-secondary hover:bg-content/[0.05] hover:text-content"
-                  }`}
-                >
-                  <span className="truncate">{r.kind}</span>
-                </button>
+                <KindRow
+                  label={entry.label}
+                  active={entry.id === selectedId}
+                  title={`${resource.group}/${resource.version}`}
+                  onSelect={() => onSelectKind(entry)}
+                />
               </li>
             );
           })}
@@ -190,11 +245,11 @@ export function Sidebar({
   cluster,
   view,
   onSelect,
-  crd,
-  onSelectCrd,
   onSwitchCluster,
   onDisconnect,
 }: SidebarProps) {
+  const selectedId = selectedKindId(view);
+
   return (
     <aside className="glass flex w-60 shrink-0 flex-col border-r">
       {/* Padded down past the macOS traffic lights, which are overlaid
@@ -207,41 +262,50 @@ export function Sidebar({
         <span className="text-sm font-semibold tracking-tight">Loupe</span>
       </div>
 
-      {/* Scrolls: the CRD list is as long as the cluster makes it. */}
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2">
-        <p className="px-2 pb-1.5 pt-2 text-2xs font-medium uppercase tracking-wide text-content-muted">
-          Cluster
-        </p>
-
-        {ITEMS.map((item) => (
+      {/* Scrolls: between the fixed sections and whatever CRDs the
+          cluster has, this list is not a fixed height. */}
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <SectionLabel>Cluster</SectionLabel>
+        {CLUSTER_ITEMS.map((item) => (
           <NavItem
             key={item.id}
             item={item}
-            active={view === item.id}
+            active={view.type === item.id}
             disabled={!cluster}
-            onSelect={() => onSelect(item.id)}
+            onSelect={() => onSelect({ type: item.id } as View)}
           />
         ))}
 
+        {/* Workloads, network, config, storage — all one component,
+            because the API server prints the columns for every one. */}
+        {KIND_SECTIONS.map((section) => (
+          <div key={section.title}>
+            <SectionLabel>{section.title}</SectionLabel>
+            {section.items.map((entry) => (
+              <KindRow
+                key={entry.id}
+                label={entry.label}
+                active={entry.id === selectedId}
+                onSelect={() => onSelect({ type: "kind", entry })}
+              />
+            ))}
+          </div>
+        ))}
+
+        <SectionLabel>Extensions</SectionLabel>
         <CrdSection
-          active={view === "crds"}
-          selected={view === "crds" ? crd : null}
+          selectedId={selectedId}
+          indexActive={view.type === "crds"}
           enabled={cluster != null}
-          onOpenIndex={() => {
-            onSelectCrd(null);
-            onSelect("crds");
-          }}
-          onSelectCrd={(r) => {
-            onSelectCrd(r);
-            onSelect("crds");
-          }}
+          onOpenIndex={() => onSelect({ type: "crds" })}
+          onSelectKind={(entry) => onSelect({ type: "kind", entry })}
         />
 
         <NavItem
           item={HELM}
-          active={view === "helm"}
+          active={view.type === "helm"}
           disabled={!cluster}
-          onSelect={() => onSelect("helm")}
+          onSelect={() => onSelect({ type: "helm" })}
         />
       </nav>
 

@@ -11,6 +11,8 @@ import {
   PairChips,
   Section,
 } from "../components/Field";
+import { DataView } from "../components/DataView";
+import { hasDataTab } from "../lib/kinds";
 import { api, type GvkRef } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
 
@@ -85,10 +87,15 @@ export function ObjectDetail({
   });
   const object = q.data;
 
+  // ConfigMaps and Secrets are opened to read their contents, so those
+  // get a tab of their own rather than sending people to the YAML.
+  const dataKind = object ? hasDataTab(object.kind, object.apiVersion) : null;
+
   // A cluster-scoped object has no namespace to look for events in, and
   // guessing "default" would show somebody else's.
   const tabs: TabSpec[] = [
     { id: "overview", label: "Overview" },
+    ...(dataKind && namespace ? [{ id: "data", label: "Data" }] : []),
     ...(namespace ? [{ id: "events", label: "Events" }] : []),
     { id: "yaml", label: "YAML" },
   ];
@@ -152,14 +159,19 @@ export function ObjectDetail({
 
             {!object.editable && (
               <p className="mt-4 text-2xs text-content-muted">
-                This cluster does not accept updates to {object.kind}, so its
-                YAML is read-only here.
+                {dataKind === "secret"
+                  ? "A Secret's values are redacted in the YAML tab, so it cannot be applied from here — saving it would overwrite every value with the placeholder."
+                  : `This cluster does not accept updates to ${object.kind}, so its YAML is read-only here.`}
               </p>
             )}
           </div>
         ) : (
           <OverviewSkeleton />
         ))}
+
+      {tab === "data" && dataKind && namespace && (
+        <DataView namespace={namespace} name={name} kind={dataKind} />
+      )}
 
       {tab === "events" && namespace && (
         <EventsTable namespace={namespace} name={name} />

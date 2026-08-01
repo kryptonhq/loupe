@@ -45,12 +45,10 @@ const CLUSTER: ClusterInfo = {
 
 function setup({
   cluster = CLUSTER as ClusterInfo | null,
-  crd = null as ApiResourceInfo | null,
-  view = "nodes" as Parameters<typeof Sidebar>[0]["view"],
+  view = { type: "nodes" } as Parameters<typeof Sidebar>[0]["view"],
 } = {}) {
   listApiResources.mockResolvedValue(CRDS);
   const onSelect = vi.fn();
-  const onSelectCrd = vi.fn();
 
   render(
     <QueryClientProvider
@@ -60,14 +58,12 @@ function setup({
         cluster={cluster}
         view={view}
         onSelect={onSelect}
-        crd={crd}
-        onSelectCrd={onSelectCrd}
         onSwitchCluster={vi.fn()}
         onDisconnect={vi.fn()}
       />
     </QueryClientProvider>,
   );
-  return { onSelect, onSelectCrd, user: userEvent.setup() };
+  return { onSelect, user: userEvent.setup() };
 }
 
 beforeEach(() => {
@@ -97,30 +93,56 @@ describe("Sidebar CRDs section", () => {
   });
 
   it("selects a kind and switches the view to it", async () => {
-    const { user, onSelect, onSelectCrd } = setup();
+    const { user, onSelect } = setup();
     await screen.findByText("3");
     await user.click(screen.getByRole("button", { name: "Expand CRDs" }));
     await user.click(screen.getByRole("button", { name: "Agent" }));
 
-    expect(onSelectCrd).toHaveBeenCalledWith(CRDS[0]);
-    expect(onSelect).toHaveBeenCalledWith("crds");
+    expect(onSelect).toHaveBeenCalledWith({
+      type: "kind",
+      entry: expect.objectContaining({ label: "Agent", id: "krypton.ai/v1/Agent" }),
+    });
   });
 
   it("clicking the section itself opens the index, not a kind", async () => {
-    const { user, onSelect, onSelectCrd } = setup();
+    const { user, onSelect } = setup();
     await user.click(screen.getByRole("button", { name: /^CRDs/ }));
-
-    expect(onSelectCrd).toHaveBeenCalledWith(null);
-    expect(onSelect).toHaveBeenCalledWith("crds");
+    expect(onSelect).toHaveBeenCalledWith({ type: "crds" });
   });
 
   it("reveals the selected kind without being asked", async () => {
     // Reaching a CRD from the index table should not leave the rail
     // shut over the thing that is on screen.
-    setup({ view: "crds", crd: CRDS[0] });
+    setup({
+      view: {
+        type: "kind",
+        entry: { id: "krypton.ai/v1/Agent", label: "Agent", gvk: CRDS[0] },
+      },
+    });
     expect(
       await screen.findByRole("button", { name: "Agent" }),
     ).toBeInTheDocument();
+  });
+
+  it("offers the everyday kinds without asking the cluster", () => {
+    // Workloads, network, config and storage are a fixed list, so they
+    // are on screen before discovery has answered — which is what makes
+    // the rail usable on a slow cluster.
+    setup();
+    for (const label of ["Deployments", "Services", "Secrets", "Volume claims"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByText("Workloads")).toBeInTheDocument();
+    expect(screen.getByText("Storage")).toBeInTheDocument();
+  });
+
+  it("reports a fixed kind as a kind view", async () => {
+    const { user, onSelect } = setup();
+    await user.click(screen.getByRole("button", { name: "Services" }));
+    expect(onSelect).toHaveBeenCalledWith({
+      type: "kind",
+      entry: expect.objectContaining({ label: "Services" }),
+    });
   });
 
   it("does not reach for the cluster before there is one", () => {

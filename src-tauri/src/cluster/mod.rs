@@ -7,12 +7,14 @@
 //! rule the in-cluster control plane follows, arrived at from the other
 //! direction.
 
+pub mod data;
 pub mod detail;
 pub mod discovery;
 pub mod edit;
 pub mod helm;
 pub mod logs;
 pub mod resources;
+pub mod table;
 
 use std::sync::Arc;
 
