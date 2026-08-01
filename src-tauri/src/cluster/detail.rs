@@ -234,7 +234,8 @@ pub async fn list_events(
         })
         .collect();
 
-    events.sort_by(|a, b| b.0.cmp(&a.0));
+    // Reverse rather than a flipped comparator: newest first, said once.
+    events.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
     Ok(events.into_iter().map(|(_, v)| v).collect())
 }
 
