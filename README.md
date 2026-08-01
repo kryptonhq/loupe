@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml"><img src="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://codecov.io/gh/kryptonhq/loupe"><img src="https://codecov.io/gh/kryptonhq/loupe/branch/main/graph/badge.svg" alt="Coverage" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-blue.svg" alt="Apache 2.0" /></a>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/pods.png" width="820" alt="Pod list with search, status and restart counts" />
 </p>
 
@@ -117,7 +123,16 @@ pnpm tauri build
 
 ```bash
 pnpm test                      # frontend unit tests
+pnpm test:coverage             # …with a coverage report
 cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+CI runs `cargo fmt --check` and `cargo clippy -- -D warnings` as well, so
+it is worth running both before pushing:
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 The Rust suite includes tests that need a real cluster. They are ignored
