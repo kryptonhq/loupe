@@ -219,7 +219,10 @@ jobs:
     # The `secrets` context is not available in a step's `if`, so the
     # token is lifted into the environment and tested from there.
     env:
-      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      # Reading this repository's release assets is the workflow's own
+      # business; only the push to the tap needs the extra token.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       VERSION: ${{ needs.version.outputs.version }}
       TAG: ${{ needs.version.outputs.tag }}
     steps:
@@ -228,11 +231,11 @@ jobs:
           ref: ${{ needs.version.outputs.tag }}
 
       - name: Update the cask
-        if: env.GH_TOKEN != ''
+        if: env.TAP_TOKEN != ''
         run: scripts/update-homebrew-tap.sh
 
       - name: Explain the skip
-        if: env.GH_TOKEN == ''
+        if: env.TAP_TOKEN == ''
         run: |
           echo "::notice::HOMEBREW_TAP_TOKEN is not set — the tap was not updated."
           echo "See RELEASING.md for how to create the tap and the token."

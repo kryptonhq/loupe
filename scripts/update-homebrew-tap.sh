@@ -8,15 +8,26 @@
 # actually download — computing them from a local build would let a
 # re-upload drift from what the cask claims.
 #
-#   VERSION=0.2.0 TAG=v0.2.0 GH_TOKEN=... scripts/update-homebrew-tap.sh
+#   VERSION=0.2.0 TAG=v0.2.0 GH_TOKEN=... TAP_TOKEN=... \
+#     scripts/update-homebrew-tap.sh
 #
-# GH_TOKEN needs `contents: write` on the tap repository only.
+# Two tokens, because they are two different repositories:
+#
+#   GH_TOKEN   reads the release assets from this repository. In CI this
+#              is the workflow's own GITHUB_TOKEN.
+#   TAP_TOKEN  pushes to the tap. Needs `contents: write` there and
+#              nothing anywhere else.
+#
+# Using one token for both would mean granting the tap's token read
+# access here, or relying on this repository staying public — neither of
+# which should be load-bearing.
 
 set -euo pipefail
 
 : "${VERSION:?set VERSION, e.g. 0.2.0}"
 : "${TAG:?set TAG, e.g. v0.2.0}"
-: "${GH_TOKEN:?set GH_TOKEN with write access to the tap}"
+: "${GH_TOKEN:?set GH_TOKEN to read the release assets}"
+: "${TAP_TOKEN:?set TAP_TOKEN with write access to the tap}"
 
 REPO="${REPO:-kryptonhq/loupe}"
 TAP_REPO="${TAP_REPO:-kryptonhq/homebrew-tap}"
@@ -54,7 +65,7 @@ if grep -q "__" "$work/loupe.rb"; then
 fi
 
 echo "cloning $TAP_REPO"
-git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" "$work/tap"
+git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$work/tap"
 
 mkdir -p "$work/tap/Casks"
 cp "$work/loupe.rb" "$work/tap/Casks/loupe.rb"

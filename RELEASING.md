@@ -136,11 +136,42 @@ To set it up:
 
 1. Create a **public** repository named exactly `homebrew-tap` under the
    `kryptonhq` organisation. The `homebrew-` prefix is what lets
-   `kryptonhq/tap` resolve. It may be empty — the first release creates
-   the branch and the `Casks/` directory.
-2. Create a fine-grained personal access token scoped to that repository
-   with **Contents: read and write**.
-3. Add it to this repository as the `HOMEBREW_TAP_TOKEN` secret.
+   `kryptonhq/tap` resolve.
+
+   Nothing needs to be committed to it — the first release creates the
+   branch and `Casks/loupe.rb`. A README is worth adding so the
+   repository is not blank to anyone who lands on it.
+
+2. Create the token at
+   **[Settings → Developer settings → Personal access tokens → Fine-grained tokens](https://github.com/settings/personal-access-tokens/new)**:
+
+   | Field | Value |
+   | --- | --- |
+   | Resource owner | `kryptonhq` — the organisation, *not* your personal account |
+   | Repository access | Only select repositories → `homebrew-tap` |
+   | Repository permissions | **Contents: Read and write** |
+   | Expiration | Whatever you will remember to rotate |
+
+   Two things catch people out. The resource owner must be the
+   organisation, or the token is issued against your personal account
+   and cannot see an org repository at all. And organisations can block
+   fine-grained tokens entirely — if the token appears to have no
+   access, check **Organisation settings → Personal access tokens** and
+   allow them.
+
+   A [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys)
+   on the tap with write access is the alternative worth knowing about:
+   it never expires and belongs to the repository rather than to a
+   person, so it does not break when someone leaves. It needs the script
+   switched to SSH, which is a small change if the expiry becomes
+   annoying.
+
+3. Add the token to **this** repository as the `HOMEBREW_TAP_TOKEN`
+   secret (Settings → Secrets and variables → Actions).
+
+The token is only used to push to the tap. Reading this repository's
+release assets uses the workflow's own `GITHUB_TOKEN`, so the tap token
+never needs access here.
 
 The release workflow then renders
 [`packaging/homebrew/loupe.rb.template`](packaging/homebrew/loupe.rb.template)
