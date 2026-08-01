@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
+import { api } from "./lib/api";
 import "./index.css";
 
 // Opening the Vite dev server in a plain browser has no Tauri bridge,
@@ -39,10 +40,39 @@ const queryClient = new QueryClient({
   },
 });
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </React.StrictMode>,
+// Ask the Rust side whether the window is genuinely translucent, and
+// mark the document if so. Failure means no bridge (browser dev) or an
+// older build; either way the opaque background is the safe default.
+void api
+  .vibrancyEnabled()
+  // Strict compare: a malformed reply must not enable a translucent
+  // stylesheet over an opaque window.
+  .then((on) => document.documentElement.classList.toggle("vibrancy", on === true))
+  .catch(() => {});
+
+const root = ReactDOM.createRoot(
+  document.getElementById("root") as HTMLElement,
 );
+
+// ?design renders the style guide instead of the app. Inside the DEV
+// guard so the module is absent from a production bundle rather than
+// present-but-unreachable.
+if (
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).has("design")
+) {
+  const { DesignSystem } = await import("./dev/DesignSystem");
+  root.render(
+    <React.StrictMode>
+      <DesignSystem />
+    </React.StrictMode>,
+  );
+} else {
+  root.render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+}

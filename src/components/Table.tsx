@@ -1,9 +1,9 @@
-// A minimal table used by every resource view.
+// The table every resource view renders through.
 //
 // Generic over the row type so each view declares its own columns
-// without casting. Kept deliberately plain: resource views differ in
-// their columns, not in their chrome, and a shared component keeps the
-// spacing and zebra rules in one place.
+// without casting. The header is sticky because these lists run to
+// hundreds of rows and losing the column names on scroll is the single
+// most annoying thing a resource table can do.
 import type { ReactNode } from "react";
 
 export interface Column<T> {
@@ -13,6 +13,8 @@ export interface Column<T> {
   /// Tabular numerals and monospace for values read by shape — ages,
   /// ready counts, restart counts.
   mono?: boolean;
+  /// Keeps a column from being squeezed by a long neighbour.
+  width?: string;
 }
 
 interface TableProps<T> {
@@ -34,61 +36,64 @@ export function Table<T>({
 }: TableProps<T>) {
   if (rows.length === 0) {
     return (
-      <p className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+      <p className="px-4 py-12 text-center text-sm text-content-muted">
         {empty ?? "Nothing to show."}
       </p>
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-left dark:border-slate-800">
+    <table className="w-full border-collapse text-sm">
+      <thead className="sticky top-0 z-10">
+        <tr className="glass text-left">
+          {columns.map((c) => (
+            <th
+              key={c.key}
+              style={c.width ? { width: c.width } : undefined}
+              className="whitespace-nowrap border-b px-4 py-2 text-2xs font-medium uppercase tracking-wide text-content-muted"
+            >
+              {c.header}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, index) => (
+          <tr
+            key={rowKey(row, index)}
+            onClick={onRowClick ? () => onRowClick(row) : undefined}
+            // Rows are only focusable when they do something; a tab stop
+            // that goes nowhere is worse than none.
+            tabIndex={onRowClick ? 0 : undefined}
+            onKeyDown={
+              onRowClick
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onRowClick(row);
+                    }
+                  }
+                : undefined
+            }
+            className={`row-hover border-b border-hairline/[0.05] last:border-0 ${
+              onRowClick ? "cursor-pointer" : ""
+            }`}
+          >
             {columns.map((c) => (
-              <th
+              <td
                 key={c.key}
-                className="px-4 py-2 font-medium text-slate-500 dark:text-slate-400"
+                className={`px-4 py-2 ${
+                  c.mono
+                    ? "font-mono tabular-nums text-content-secondary"
+                    : ""
+                }`}
               >
-                {c.header}
-              </th>
+                {c.render(row)}
+              </td>
             ))}
           </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr
-              key={rowKey(row, index)}
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-              // Rows are only focusable when they actually do something;
-              // a tab stop that does nothing is worse than none.
-              tabIndex={onRowClick ? 0 : undefined}
-              onKeyDown={
-                onRowClick
-                  ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onRowClick(row);
-                      }
-                    }
-                  : undefined
-              }
-              className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-slate-900 dark:hover:bg-slate-900/50 ${
-                onRowClick ? "cursor-pointer" : ""
-              }`}
-            >
-              {columns.map((c) => (
-                <td
-                  key={c.key}
-                  className={`px-4 py-2 ${c.mono ? "font-mono tabular-nums text-slate-600 dark:text-slate-400" : ""}`}
-                >
-                  {c.render(row)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        ))}
+      </tbody>
+    </table>
   );
 }

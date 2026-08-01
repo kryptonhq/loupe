@@ -3,14 +3,18 @@ import type { ReactNode } from "react";
 // Small labelled pill. Used wherever a cell holds a set of values —
 // node roles, labels, event reasons — because a comma-separated string
 // reads as one blob and a chip reads as N things.
+//
+// Tones are tinted rather than solid: at this size a saturated fill
+// fights the text next to it, and a 12% tint carries the same meaning
+// without pulling the eye off the row.
 
 const TONES = {
-  neutral:
-    "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  accent: "bg-accent/10 text-accent dark:bg-accent/20 dark:text-indigo-300",
-  ok: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
-  warn: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  error: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+  neutral: "bg-content/[0.06] text-content-secondary",
+  accent: "bg-accent/[0.12] text-accent",
+  ok: "bg-success/[0.12] text-success",
+  warn: "bg-warn/[0.14] text-warn",
+  danger: "bg-danger/[0.12] text-danger",
+  info: "bg-info/[0.12] text-info",
 } as const;
 
 export type ChipTone = keyof typeof TONES;
@@ -29,7 +33,7 @@ export function Chip({
   return (
     <span
       title={title}
-      className={`inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${TONES[tone]} ${mono ? "font-mono" : ""}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-sm px-1.5 py-0.5 text-2xs font-medium ${TONES[tone]} ${mono ? "font-mono" : ""}`}
     >
       {children}
     </span>
@@ -48,7 +52,7 @@ export function ChipList({
   mono?: boolean;
 }) {
   if (values.length === 0) {
-    return <span className="text-slate-400">—</span>;
+    return <span className="text-content-muted">—</span>;
   }
   return (
     <span className="flex flex-wrap gap-1">
@@ -70,7 +74,7 @@ export function eventTone(type: string): ChipTone {
     case "Warning":
       return "warn";
     case "Error":
-      return "error";
+      return "danger";
     default:
       return "neutral";
   }

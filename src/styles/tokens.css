@@ -1,0 +1,129 @@
+/* Design tokens.
+ *
+ * Every colour in the app resolves through one of these variables. The
+ * rule: components never name a palette colour (no `bg-slate-900`), they
+ * name a role (`bg-surface-2`, `text-muted`). That is what lets the
+ * light and dark themes stay in step, and what makes a glass surface a
+ * one-line change instead of a hunt through markup.
+ *
+ * Values are space-separated RGB channels rather than hex so Tailwind's
+ * alpha modifiers work: `bg-surface-2/60` is only possible this way.
+ */
+
+:root {
+  /* Neutrals carry a slight blue cast. Pure grey next to the indigo
+     accent reads as dirty; the cast keeps the whole surface coherent. */
+  --base: 242 244 248;
+  --surface-1: 255 255 255;
+  --surface-2: 255 255 255;
+  --surface-3: 236 239 244;
+
+  --border: 15 23 42;
+  --border-alpha: 0.09;
+  --border-strong-alpha: 0.14;
+
+  --text: 15 23 42;
+  --text-secondary: 71 85 105;
+  --text-muted: 139 148 165;
+
+  --accent: 99 102 241;
+  --accent-fg: 255 255 255;
+
+  --success: 22 163 74;
+  --warn: 217 119 6;
+  --danger: 225 29 72;
+  --info: 2 132 199;
+
+  /* Glass: how much of the layer beneath shows through, and how hard
+     the highlight along its top edge is. Tuned separately per theme
+     because translucency reads very differently on light and dark. */
+  --glass-bg: 255 255 255;
+  --glass-alpha: 0.72;
+  --glass-highlight: 0.9;
+  --glass-blur: 20px;
+
+  /* The ambient wash behind the window. Kept very low contrast — the
+     reference apps use a vivid desktop gradient, but that is the user's
+     wallpaper showing through, not something the app paints. */
+  --ambient-1: 99 102 241;
+  --ambient-2: 14 165 233;
+  --ambient-alpha: 0.05;
+
+  /* Code surfaces — the YAML pane and the log viewer.
+   *
+   * These get their own ramp rather than reusing the surface tokens. A
+   * terminal-black pane on a light theme is jarring, and syntax colours
+   * that read well on near-black are washed out on near-white, so the
+   * two themes need genuinely different values rather than one set at
+   * different opacities. */
+  --code-bg: 250 250 252;
+  --code-fg: 30 41 59;
+  --code-gutter: 165 175 190;
+  --code-line-hover: 15 23 42;
+
+  --syn-key: 29 78 216;
+  --syn-string: 4 120 87;
+  --syn-number: 180 83 9;
+  --syn-const: 126 34 206;
+  --syn-comment: 130 140 155;
+  --syn-punct: 130 140 155;
+
+  --shadow-color: 15 23 42;
+}
+
+.dark {
+  --base: 9 11 16;
+  --surface-1: 15 18 25;
+  --surface-2: 20 24 33;
+  --surface-3: 27 32 43;
+
+  --border: 255 255 255;
+  --border-alpha: 0.08;
+  --border-strong-alpha: 0.14;
+
+  --text: 228 233 242;
+  --text-secondary: 154 164 184;
+  --text-muted: 106 116 137;
+
+  --accent: 129 132 248;
+  --accent-fg: 255 255 255;
+
+  --success: 52 211 153;
+  --warn: 251 191 36;
+  --danger: 251 113 133;
+  --info: 56 189 248;
+
+  --glass-bg: 20 24 33;
+  --glass-alpha: 0.62;
+  --glass-highlight: 0.06;
+  --glass-blur: 24px;
+
+  --ambient-alpha: 0.1;
+
+  --code-bg: 6 8 12;
+  --code-fg: 203 213 225;
+  --code-gutter: 71 85 105;
+  --code-line-hover: 255 255 255;
+
+  --syn-key: 125 211 252;
+  --syn-string: 110 231 183;
+  --syn-number: 252 211 77;
+  --syn-const: 196 181 253;
+  --syn-comment: 100 116 139;
+  --syn-punct: 100 116 139;
+
+  --shadow-color: 0 0 0;
+}
+
+/* When the window is genuinely translucent — native vibrancy is active
+ * and the OS is blurring the desktop behind us — the opaque background
+ * has to get out of the way. Set by the Rust side on startup so the
+ * frontend never guesses at platform support.
+ */
+.vibrancy {
+  --surface-1: var(--glass-bg);
+}
+
+.vibrancy body {
+  background: transparent;
+}

@@ -157,6 +157,12 @@ export const api = {
   startPodLogs: (options: LogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_pod_logs", { options, channel }),
   stopPodLogs: (id: number) => invoke<boolean>("stop_pod_logs", { id }),
+
+  /// Whether native window vibrancy actually took effect. Asked rather
+  /// than inferred from the platform: support depends on OS build and,
+  /// on Linux, the compositor — and a translucent stylesheet over an
+  /// opaque window looks broken in a very specific way.
+  vibrancyEnabled: () => invoke<boolean>("vibrancy_enabled"),
 };
 
 export { Channel };

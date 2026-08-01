@@ -6,6 +6,7 @@ import {
   type ContainerView,
   type LogEvent,
 } from "../lib/api";
+import { Select } from "./Select";
 
 // Lines are capped so a chatty pod cannot grow the DOM without bound.
 // At 5k lines the viewer stays responsive; beyond that the browser
@@ -106,19 +107,15 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-2 text-sm dark:border-slate-800">
+      <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2 text-xs">
         {containers.length > 1 && (
-          <select
-            value={container}
-            onChange={(e) => setContainer(e.target.value)}
-            className="rounded border border-slate-300 bg-transparent px-2 py-1 dark:border-slate-700"
-          >
+          <Select value={container} onChange={setContainer} title="Container">
             {containers.map((c) => (
               <option key={c.name} value={c.name}>
                 {c.name}
               </option>
             ))}
-          </select>
+          </Select>
         )}
 
         <label className="flex items-center gap-1.5">
@@ -149,7 +146,7 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
           Previous
         </label>
 
-        <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">
+        <span className="ml-auto text-2xs text-content-muted">
           {status === "streaming" && follow
             ? "streaming…"
             : status === "ended"
@@ -160,14 +157,14 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
       </div>
 
       {error && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+        <div className="animate-fade-in border-b border-danger/20 bg-danger/[0.08] px-4 py-2 text-xs text-danger">
           {error}
         </div>
       )}
 
       <pre
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-auto bg-slate-950 px-4 py-2 font-mono text-xs leading-relaxed text-slate-200"
+        className="min-h-0 flex-1 overflow-auto bg-[rgb(var(--code-bg))] px-4 py-2 font-mono text-xs leading-[1.6] text-[rgb(var(--code-fg))]"
       >
         {lines.length === 0 && status !== "streaming"
           ? "No output."

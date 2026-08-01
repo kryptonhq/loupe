@@ -72,12 +72,12 @@ export function ContextPicker({
   });
 
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="w-full max-w-lg">
+    <div className="ambient drag-region flex h-full items-center justify-center p-8">
+      <div className="no-drag w-full max-w-lg animate-slide-up">
         <div className="mb-6 flex flex-col items-center text-center">
           <Logo className="mb-3 h-14 w-14" />
           <h1 className="text-xl font-semibold">Loupe</h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-sm text-content-muted">
             {current
               ? "Switch to another cluster."
               : "Choose a cluster to connect to."}
@@ -85,7 +85,7 @@ export function ContextPicker({
         </div>
 
         {error && (
-          <div className="mb-4 rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+          <div className="animate-fade-in mb-4 rounded-sm border border-danger/20 bg-danger/[0.08] px-3 py-2 text-xs text-danger">
             {error}
           </div>
         )}
@@ -97,7 +97,7 @@ export function ContextPicker({
             <SkeletonBlock className="h-14 w-full" />
           </div>
         ) : contexts.length === 0 ? (
-          <p className="text-center text-sm text-slate-500 dark:text-slate-400">
+          <p className="text-center text-sm text-content-muted">
             No contexts found. Loupe reads the same kubeconfig as kubectl — set{" "}
             <code className="font-mono">KUBECONFIG</code> or create{" "}
             <code className="font-mono">~/.kube/config</code>.
@@ -109,11 +109,11 @@ export function ContextPicker({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Filter contexts…"
-                className="mb-2 w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm placeholder:text-slate-400 focus:border-accent focus:outline-none dark:border-slate-700"
+                className="mb-2 w-full rounded-sm border bg-content/[0.03] px-2.5 py-1.5 text-sm transition-colors duration-150 ease-swift placeholder:text-content-muted focus:border-accent/40"
               />
             )}
 
-            <ul className="divide-y divide-slate-200 overflow-hidden rounded border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+            <ul className="glass-overlay divide-y divide-hairline/[0.06] overflow-hidden p-0">
               {filtered.map((ctx) => {
                 const active = current?.context === ctx.name;
                 return (
@@ -121,7 +121,7 @@ export function ContextPicker({
                     <button
                       onClick={() => connect(ctx.name)}
                       disabled={connecting !== null}
-                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60 dark:hover:bg-slate-900"
+                      className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors duration-150 ease-swift hover:bg-content/[0.05] disabled:opacity-60"
                     >
                       <span className="min-w-0">
                         <span className="flex items-center gap-2">
@@ -133,12 +133,12 @@ export function ContextPicker({
                             <Chip tone="accent">kubeconfig default</Chip>
                           )}
                         </span>
-                        <span className="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">
+                        <span className="mt-0.5 block truncate text-2xs text-content-muted">
                           {ctx.cluster}
                           {ctx.namespace ? ` · ${ctx.namespace}` : ""}
                         </span>
                       </span>
-                      <span className="ml-3 shrink-0 text-xs text-slate-400">
+                      <span className="ml-3 shrink-0 text-xs text-content-muted">
                         {connecting === ctx.name ? "Connecting…" : "→"}
                       </span>
                     </button>
@@ -146,7 +146,7 @@ export function ContextPicker({
                 );
               })}
               {filtered.length === 0 && (
-                <li className="px-4 py-6 text-center text-sm text-slate-500">
+                <li className="px-4 py-6 text-center text-sm text-content-muted">
                   Nothing matches “{query}”.
                 </li>
               )}
@@ -157,7 +157,7 @@ export function ContextPicker({
         {onCancel && (
           <button
             onClick={onCancel}
-            className="mt-4 w-full text-center text-sm text-slate-500 underline-offset-2 hover:underline dark:text-slate-400"
+            className="mt-4 w-full text-center text-sm text-content-muted underline-offset-2 transition-colors hover:text-content-secondary hover:underline"
           >
             Cancel
           </button>

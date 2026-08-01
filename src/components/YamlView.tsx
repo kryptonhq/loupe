@@ -1,17 +1,18 @@
 import { useMemo, useState } from "react";
 import { highlightYaml, type TokenKind } from "../lib/highlight";
 
-// Colours are assigned per token kind. Keys carry the structure, so they
-// get the strongest weight; punctuation recedes; comments recede furthest.
-const TOKEN_CLASS: Record<TokenKind, string> = {
-  key: "text-sky-300",
-  string: "text-emerald-300",
-  number: "text-amber-300",
-  boolean: "text-purple-300",
-  null: "text-purple-300",
-  comment: "text-slate-500 italic",
-  punctuation: "text-slate-500",
-  text: "text-slate-200",
+// Colours come from the --syn-* tokens so the pane works in both
+// themes. Keys carry the structure and get the strongest weight;
+// punctuation recedes; comments recede furthest.
+const TOKEN_STYLE: Record<TokenKind, string> = {
+  key: "text-[rgb(var(--syn-key))]",
+  string: "text-[rgb(var(--syn-string))]",
+  number: "text-[rgb(var(--syn-number))]",
+  boolean: "text-[rgb(var(--syn-const))]",
+  null: "text-[rgb(var(--syn-const))]",
+  comment: "text-[rgb(var(--syn-comment))] italic",
+  punctuation: "text-[rgb(var(--syn-punct))]",
+  text: "text-[rgb(var(--code-fg))]",
 };
 
 export function YamlView({ source }: { source: string }) {
@@ -25,29 +26,32 @@ export function YamlView({ source }: { source: string }) {
   }
 
   return (
-    <div className="relative h-full">
+    <div className="relative h-full bg-[rgb(var(--code-bg))]">
       <button
         onClick={copy}
-        className="absolute right-3 top-2 z-10 rounded border border-slate-700 bg-slate-900/90 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+        className="glass-overlay absolute right-3 top-2 z-10 px-2 py-1 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:text-content"
       >
         {copied ? "Copied" : "Copy"}
       </button>
 
-      <pre className="h-full overflow-auto bg-slate-950 py-2 font-mono text-xs leading-relaxed">
+      <pre className="h-full overflow-auto py-2 font-mono text-xs leading-[1.6]">
         <code>
           {lines.map((line, i) => (
-            <div key={i} className="flex hover:bg-slate-900/60">
+            <div
+              key={i}
+              className="flex hover:bg-[rgb(var(--code-line-hover)/0.04)]"
+            >
               {/* Line numbers are unselectable so copying the pane
                   yields YAML, not YAML interleaved with digits. */}
-              <span className="w-12 shrink-0 select-none pr-3 text-right text-slate-600">
+              <span className="w-12 shrink-0 select-none pr-3 text-right text-[rgb(var(--code-gutter))]">
                 {i + 1}
               </span>
               <span className="min-w-0 whitespace-pre pr-4">
                 {line.tokens.length === 0 ? (
-                  " "
+                  " "
                 ) : (
                   line.tokens.map((t, j) => (
-                    <span key={j} className={TOKEN_CLASS[t.kind]}>
+                    <span key={j} className={TOKEN_STYLE[t.kind]}>
                       {t.text}
                     </span>
                   ))
