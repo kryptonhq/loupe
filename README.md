@@ -105,7 +105,25 @@ your kubeconfig says you are, so the API server decides what you can see.
 If a listing comes back denied, that is your RBAC — not a bug in the app,
 and the error is surfaced rather than swallowed into an empty table.
 
-## Getting started
+## Installing
+
+```bash
+brew install --cask kryptonhq/tap/loupe
+```
+
+Or take a build from [releases](https://github.com/kryptonhq/loupe/releases):
+
+| Platform | Download |
+| --- | --- |
+| macOS (Apple Silicon) | `Loupe_<version>_aarch64.dmg` |
+| macOS (Intel) | `Loupe_<version>_x64.dmg` |
+| Linux | `.AppImage` (portable) or `.deb` |
+| Windows | `-setup.exe` or `.msi` |
+
+Loupe reads the same kubeconfig as `kubectl`, so there is nothing to
+configure — it lists the contexts you already have.
+
+## Building from source
 
 Prerequisites: [Rust](https://rustup.rs), Node 22+, pnpm 10+. On macOS
 you also need the Xcode command line tools.
@@ -167,6 +185,11 @@ src-tauri/
 
 The frontend mirrors the runtime's operator UI — same Tailwind theme,
 same mark — so the two read as one product.
+
+## Releasing
+
+Tag-driven, built by GitHub Actions, published as a GitHub release. See
+[RELEASING.md](RELEASING.md).
 
 ## Contributing
 

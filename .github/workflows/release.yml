@@ -1,0 +1,230 @@
+name: release
+
+# Tag-driven. Pushing `v0.2.0` builds every platform, attaches the
+# installers to a draft GitHub release, and publishes it once they have
+# all landed — so a release is never half-visible while Windows is still
+# compiling.
+#
+#   scripts/version.py --set 0.2.0
+#   git commit -sam "release: 0.2.0" && git tag v0.2.0 && git push --follow-tags
+#
+# See RELEASING.md for what needs to be true before that, and which
+# secrets turn signing on.
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets a failed run be retried without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+
+jobs:
+  # A tag whose manifests say a different version produces installers
+  # named after the manifest, not the tag — and a Homebrew cask that
+  # 404s. Cheap to check, miserable to discover afterwards.
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - id: resolve
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          python3 scripts/version.py --check "$tag"
+
+  # One draft up front, so the matrix uploads into it rather than racing
+  # to create it.
+  draft:
+    name: Draft release
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = "${{ needs.version.outputs.tag }}";
+            const { owner, repo } = context.repo;
+
+            // Reuse the draft if this is a retry, rather than stacking
+            // up a second release for the same tag.
+            const releases = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
+            const existing = releases.data.find((r) => r.tag_name === tag && r.draft);
+            if (existing) {
+              core.info(`reusing draft ${existing.id}`);
+              return existing.id;
+            }
+
+            const created = await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: tag,
+              name: `Loupe ${tag}`,
+              draft: true,
+              generate_release_notes: true,
+            });
+            return created.data.id;
+          result-encoding: string
+
+  build:
+    name: ${{ matrix.label }}
+    needs: [version, draft]
+    strategy:
+      # One platform failing should not cancel installers that already
+      # built — the draft keeps whatever landed and the run can be
+      # retried for the rest.
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          - label: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
+          # Built on the oldest runner we support so the binary does not
+          # pick up a glibc newer than the distros people actually run.
+          - label: Linux (x86_64)
+            os: ubuntu-22.04
+            target: ""
+            args: ""
+          - label: Windows (x86_64)
+            os: windows-latest
+            target: ""
+            args: ""
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Empty for the native builds; the macOS jobs cross-compile,
+          # and the Intel one is a cross-compile on an Arm runner.
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install system dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libglib2.0-dev
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing and notarisation. All absent on a fork or
+          # before the certificates exist, and Tauri then produces an
+          # unsigned bundle rather than failing — see RELEASING.md for
+          # what that costs the people installing it.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  publish:
+    name: Publish
+    needs: [version, draft, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const release_id = Number("${{ needs.draft.outputs.release_id }}");
+
+            const assets = await github.rest.repos.listReleaseAssets({ owner, repo, release_id });
+            const names = assets.data.map((a) => a.name);
+            core.info(`assets:\n  ${names.join("\n  ")}`);
+
+            // Publishing a release that is missing a platform is worse
+            // than failing here: the tag looks complete and the gap is
+            // only found by whoever tried to download it.
+            const expected = [/\.dmg$/, /\.AppImage$/, /\.deb$/, /-setup\.exe$/, /\.msi$/];
+            const missing = expected.filter((p) => !names.some((n) => p.test(n)));
+            if (missing.length) {
+              core.setFailed(`no asset matching: ${missing.join(", ")}`);
+              return;
+            }
+
+            await github.rest.repos.updateRelease({
+              owner, repo, release_id,
+              draft: false,
+              make_latest: "true",
+            });
+            core.info("published");
+
+  # Updates the Homebrew tap so `brew upgrade` sees the new version.
+  # Skipped when the token is absent, which is the state until the tap
+  # repository exists.
+  homebrew:
+    name: Homebrew tap
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    # The `secrets` context is not available in a step's `if`, so the
+    # token is lifted into the environment and tested from there.
+    env:
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Update the cask
+        if: env.GH_TOKEN != ''
+        run: scripts/update-homebrew-tap.sh
+
+      - name: Explain the skip
+        if: env.GH_TOKEN == ''
+        run: |
+          echo "::notice::HOMEBREW_TAP_TOKEN is not set — the tap was not updated."
+          echo "See RELEASING.md for how to create the tap and the token."
