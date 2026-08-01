@@ -155,13 +155,21 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing and notarisation. All absent on a fork or
-          # before the certificates exist, and Tauri then produces an
-          # unsigned bundle rather than failing — see RELEASING.md for
-          # what that costs the people installing it.
+          # macOS signing and notarisation. The six secrets go together;
+          # with all of them Tauri signs with the real identity and
+          # notarises, and with none of them it falls back to "-".
+          #
+          # That fallback matters more than it looks. Left to itself
+          # Tauri does not codesign the bundle at all, and the only
+          # signature is the linker's — which macOS reads as *malformed*
+          # and reports as "Loupe is damaged and can't be opened",
+          # pointing the user at a corrupt download rather than at an
+          # unsigned app. An explicit ad-hoc identity produces a valid
+          # signature with the hardened runtime, so the app is refused
+          # for the reason it actually is: not notarised.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

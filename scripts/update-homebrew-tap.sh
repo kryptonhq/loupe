@@ -60,15 +60,24 @@ mkdir -p "$work/tap/Casks"
 cp "$work/loupe.rb" "$work/tap/Casks/loupe.rb"
 
 cd "$work/tap"
-if git diff --quiet; then
+git config user.name "loupe-release"
+git config user.email "noreply@krypton.ai"
+
+# Staged before the comparison: on the first release the cask does not
+# exist yet, and `git diff` does not see untracked files — it would
+# report the tree clean and skip the push that matters most.
+git add Casks/loupe.rb
+if git diff --cached --quiet; then
   echo "cask already up to date at $VERSION"
   exit 0
 fi
 
-git config user.name "loupe-release"
-git config user.email "noreply@krypton.ai"
-git add Casks/loupe.rb
 git commit -m "loupe ${VERSION}"
-git push
 
-echo "tap updated to $VERSION"
+# An empty tap has no branch yet, and a clone of one leaves HEAD unborn.
+# Pushing an explicit refspec works in both cases, and does not assume
+# the tap's default branch is called main.
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || echo main)"
+git push origin "HEAD:refs/heads/${branch}"
+
+echo "tap updated to $VERSION on ${branch}"

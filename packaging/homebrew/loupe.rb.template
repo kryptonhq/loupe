@@ -19,6 +19,26 @@ cask "loupe" do
 
   app "Loupe.app"
 
+  # Said plainly rather than worked around. Loupe is ad-hoc signed but
+  # not notarised, so Gatekeeper refuses it on first open. A cask can
+  # strip the quarantine attribute in a postflight and make that
+  # invisible — this one deliberately does not. Removing a security
+  # attribute on someone's behalf, without them asking, is not a
+  # decision an installer should make quietly.
+  caveats <<~EOS
+    Loupe is not yet notarised by Apple, so macOS will refuse to open it
+    the first time. Either allow it once:
+
+      System Settings -> Privacy & Security -> Open Anyway
+
+    or install without the quarantine attribute:
+
+      brew install --cask --no-quarantine #{token}
+
+    Notarised builds are planned; see
+    https://github.com/kryptonhq/loupe/blob/main/RELEASING.md
+  EOS
+
   # Everything Loupe writes, so `brew uninstall --zap` leaves nothing.
   # `settings.json` lives in the Application Support directory; the
   # kubeconfig does not belong to us and is deliberately not listed.

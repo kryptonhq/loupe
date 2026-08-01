@@ -111,6 +111,10 @@ and the error is surfaced rather than swallowed into an empty table.
 brew install --cask kryptonhq/tap/loupe
 ```
 
+Loupe is not notarised by Apple yet, so macOS blocks the first launch.
+Allow it once under **System Settings → Privacy & Security → Open
+Anyway**, or install with `--no-quarantine`.
+
 Or take a build from [releases](https://github.com/kryptonhq/loupe/releases):
 
 | Platform | Download |

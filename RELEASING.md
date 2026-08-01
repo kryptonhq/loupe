@@ -48,16 +48,35 @@ the app without a fight.
 
 ### macOS
 
-Unsigned and un-notarised, macOS refuses to open the app at all —
-Gatekeeper reports it as damaged, and the only way past is
-`xattr -d com.apple.quarantine`, which is not something to ask of
-someone installing a Kubernetes client.
+There are three states, not two, and the difference between the first
+two is worth understanding before deciding what to do about the third.
 
-It also rules out Homebrew: casks
+**Left alone**, Tauri does not codesign the bundle at all. The only
+signature is the one the linker leaves on the binary, which macOS reads
+as *malformed* — `spctl` reports "code has no resources but signature
+indicates they must be present", and the user is told **"Loupe is
+damaged and can't be opened. You should move it to the Trash."** That
+message is actively misleading: it points at a corrupt download rather
+than at an unsigned app, and there is no obvious way past it.
+
+**Ad-hoc signed**, which is what the release workflow does when no
+certificate is configured, the bundle carries a valid signature and the
+hardened runtime. Gatekeeper still refuses it — there is no
+notarisation — but for the reason it actually is, and the user gets the
+normal "Open Anyway" path in Privacy & Security. This costs nothing and
+is the current default.
+
+**Signed and notarised** is the only state where the app opens on a
+double-click, and the only one homebrew/cask would accept, since a cask
+there
 [must not require Gatekeeper to be bypassed](https://docs.brew.sh/Acceptable-Casks).
+Our own tap has no such rule, so the cask ships today with a `caveats`
+block that explains the situation rather than a `postflight` that strips
+the quarantine attribute silently.
 
-Signing needs an Apple Developer account (99 USD/year) and these
-repository secrets:
+Getting there needs an Apple Developer account (99 USD/year) and these
+repository secrets. They are all-or-nothing: a partial set makes Tauri
+attempt a notarisation it cannot complete.
 
 | Secret | What it is |
 | --- | --- |
@@ -73,8 +92,9 @@ repository secrets:
 base64 -i DeveloperID.p12 | pbcopy
 ```
 
-When they are all present Tauri signs and notarises; when any is absent
-it builds unsigned and says so in the log.
+When they are all present Tauri signs with the real identity and
+notarises. When `APPLE_SIGNING_IDENTITY` is absent the workflow passes
+`-` instead, which is the ad-hoc case above.
 
 ### Windows
 
@@ -89,6 +109,17 @@ credential-only path.
 ```bash
 brew install --cask kryptonhq/tap/loupe
 ```
+
+Until the builds are notarised, first launch needs one of:
+
+- **System Settings → Privacy & Security → Open Anyway**, or
+- `brew install --cask --no-quarantine kryptonhq/tap/loupe`
+
+The cask says so in its caveats. It could remove the quarantine
+attribute itself in a `postflight` and make the whole thing invisible,
+and deliberately does not: stripping a security attribute on someone's
+behalf, without them asking, is not a decision an installer should make
+quietly.
 
 ### The tap
 
@@ -105,7 +136,8 @@ To set it up:
 
 1. Create a **public** repository named exactly `homebrew-tap` under the
    `kryptonhq` organisation. The `homebrew-` prefix is what lets
-   `kryptonhq/tap` resolve.
+   `kryptonhq/tap` resolve. It may be empty — the first release creates
+   the branch and the `Casks/` directory.
 2. Create a fine-grained personal access token scoped to that repository
    with **Contents: read and write**.
 3. Add it to this repository as the `HOMEBREW_TAP_TOKEN` secret.
