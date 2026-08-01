@@ -8,6 +8,7 @@
 
 mod cluster;
 mod error;
+mod vibrancy;
 
 use cluster::{ClusterInfo, ContextInfo, SharedSession};
 use error::Result;
@@ -102,12 +103,25 @@ fn log_streams() -> &'static cluster::logs::LogStreams {
     STREAMS.get_or_init(cluster::logs::LogStreams::default)
 }
 
+/// Whether native window vibrancy is actually active.
+///
+/// The frontend asks at startup rather than guessing from the platform:
+/// a translucent stylesheet over an opaque window looks broken, and
+/// support depends on OS build and (on Linux) the compositor.
+#[tauri::command]
+fn vibrancy_enabled(state: tauri::State<'_, VibrancyState>) -> bool {
+    state.0
+}
+
+struct VibrancyState(bool);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(SharedSession::default());
+            app.manage(VibrancyState(vibrancy::setup(app)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -122,6 +136,7 @@ pub fn run() {
             list_events,
             start_pod_logs,
             stop_pod_logs,
+            vibrancy_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Loupe");

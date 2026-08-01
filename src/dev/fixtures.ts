@@ -189,6 +189,9 @@ const FIXTURES: Record<string, unknown> = {
     },
   ],
   disconnect: null,
+  // A browser has no native window to make translucent. Without this
+  // the fallback `[]` would apply, and an empty array is truthy.
+  vibrancy_enabled: false,
   stop_pod_logs: true,
   start_pod_logs: 1,
 };

@@ -2,12 +2,15 @@
 //
 // Colour alone would fail for the ~8% of men with a colour-vision
 // deficiency, so the dot always sits next to its label rather than
-// replacing it.
+// replacing it. Each dot carries a soft halo — at 6px a flat circle is
+// easy to miss when scanning a long list, and the halo gives it presence
+// without making it larger.
+
 const TONE = {
-  ok: "bg-emerald-500",
-  warn: "bg-amber-500",
-  error: "bg-rose-500",
-  unknown: "bg-slate-400",
+  ok: "bg-success shadow-[0_0_0_3px_rgb(var(--success)/0.15)]",
+  warn: "bg-warn shadow-[0_0_0_3px_rgb(var(--warn)/0.15)]",
+  danger: "bg-danger shadow-[0_0_0_3px_rgb(var(--danger)/0.15)]",
+  unknown: "bg-content-muted",
 } as const;
 
 export type Tone = keyof typeof TONE;
@@ -21,7 +24,7 @@ export function phaseTone(phase: string): Tone {
     case "Pending":
       return "warn";
     case "Failed":
-      return "error";
+      return "danger";
     case "Succeeded":
       return "unknown";
     default:
@@ -32,8 +35,8 @@ export function phaseTone(phase: string): Tone {
 export function StatusDot({ tone, label }: { tone: Tone; label: string }) {
   return (
     <span className="inline-flex items-center gap-2">
-      <span className={`h-2 w-2 shrink-0 rounded-full ${TONE[tone]}`} />
-      {label}
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${TONE[tone]}`} />
+      <span className="truncate">{label}</span>
     </span>
   );
 }

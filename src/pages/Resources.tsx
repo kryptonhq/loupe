@@ -3,57 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
 import { Chip, ChipList } from "../components/Chip";
-import { RefreshingDot } from "../components/Skeleton";
+import { Panel } from "../components/Panel";
+import { Select } from "../components/Select";
 import { StatusDot, phaseTone } from "../components/StatusDot";
 import {
   api,
-  errorMessage,
   type NamespaceSummary,
   type NodeSummary,
   type PodSummary,
 } from "../lib/api";
 import { PodDetail } from "./PodDetail";
-
-function Panel({
-  title,
-  error,
-  isFetching,
-  onRefresh,
-  children,
-}: {
-  title: string;
-  error: unknown;
-  isFetching: boolean;
-  onRefresh: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-        <h2 className="font-semibold">{title}</h2>
-        <div className="flex items-center gap-3">
-          {/* Shown instead of a skeleton once data exists, so a
-              background refetch never blanks the table. */}
-          {isFetching && <RefreshingDot />}
-          <button
-            onClick={onRefresh}
-            className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-          >
-            Refresh
-          </button>
-        </div>
-      </header>
-
-      {error != null && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
-          {errorMessage(error)}
-        </div>
-      )}
-
-      <div className="min-h-0 flex-1">{children}</div>
-    </section>
-  );
-}
 
 export function Nodes() {
   const q = useQuery({
@@ -68,7 +27,7 @@ export function Nodes() {
       header: "Status",
       render: (n) => (
         <StatusDot
-          tone={n.ready ? "ok" : "error"}
+          tone={n.ready ? "ok" : "danger"}
           label={n.ready ? "Ready" : "NotReady"}
         />
       ),
@@ -87,6 +46,7 @@ export function Nodes() {
   return (
     <Panel
       title="Nodes"
+      subtitle="Cluster capacity and readiness"
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
@@ -124,6 +84,7 @@ export function Namespaces() {
   return (
     <Panel
       title="Namespaces"
+      subtitle="Tenancy boundaries in this cluster"
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
@@ -176,9 +137,9 @@ export function Pods() {
       // A restarting pod is the signal people scan this column for.
       render: (p) =>
         p.restarts > 0 ? (
-          <Chip tone={p.restarts > 5 ? "error" : "warn"}>{p.restarts}</Chip>
+          <Chip tone={p.restarts > 5 ? "danger" : "warn"}>{p.restarts}</Chip>
         ) : (
-          <span className="text-slate-400">0</span>
+          <span className="text-content-muted">0</span>
         ),
     },
     { key: "node", header: "Node", render: (p) => p.node ?? "—" },
@@ -198,6 +159,7 @@ export function Pods() {
   return (
     <Panel
       title="Pods"
+      subtitle="Workloads currently scheduled"
       error={pods.error}
       isFetching={pods.isFetching && !pods.isLoading}
       onRefresh={() => pods.refetch()}
@@ -211,18 +173,14 @@ export function Pods() {
         empty="No pods visible."
         onRowClick={(p) => setSelected({ namespace: p.namespace, name: p.name })}
         toolbar={
-          <select
-            value={namespace}
-            onChange={(e) => setNamespace(e.target.value)}
-            className="shrink-0 rounded border border-slate-300 bg-transparent px-2 py-1 text-sm dark:border-slate-700"
-          >
+          <Select value={namespace} onChange={setNamespace}>
             <option value="">All namespaces</option>
             {(namespaces.data ?? []).map((ns) => (
               <option key={ns.name} value={ns.name}>
                 {ns.name}
               </option>
             ))}
-          </select>
+          </Select>
         }
       />
     </Panel>

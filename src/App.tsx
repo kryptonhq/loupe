@@ -63,7 +63,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="ambient flex h-full">
       <Sidebar
         cluster={cluster}
         view={view}

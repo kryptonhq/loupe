@@ -1,3 +1,5 @@
+@import "./styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -10,32 +12,117 @@
   }
 
   body {
-    font-family:
-      "Inter",
-      -apple-system,
-      BlinkMacSystemFont,
-      "Segoe UI",
-      sans-serif;
-    @apply bg-white text-slate-900;
-    /* The window chrome is ours; native text selection on chrome and
-       the drag region reads as a bug in a desktop app. */
+    @apply bg-base font-sans text-base text-content;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* The app owns its own scrolling regions; a scrollable body in a
+       desktop window shows up as a rubber-band bounce on macOS. */
     overflow: hidden;
   }
 
-  .dark body {
-    @apply bg-slate-950 text-slate-100;
+  /* Visible for keyboard users, absent for mouse clicks. :focus-visible
+     does that natively, so nothing needs to opt out. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60;
+  }
+
+  /* The default overlay scrollbar is fine in light mode and nearly
+     invisible on dark surfaces. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full border-4 border-solid border-transparent;
+    background-clip: padding-box;
+    background-color: rgb(var(--text-muted) / 0.35);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--text-muted) / 0.55);
+  }
+
+  /* Everything animated here is decorative. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @layer components {
-  /* Anything inside the title bar should drag the window, except
-     controls, which opt back out with .no-drag. */
+  /* ---- Window chrome ------------------------------------------------ */
+
+  /* Anything inside the title bar drags the window; controls opt back
+     out with .no-drag. */
   .drag-region {
     -webkit-app-region: drag;
   }
 
   .no-drag {
     -webkit-app-region: no-drag;
+  }
+
+  /* ---- Glass -------------------------------------------------------- */
+
+  /* `glass` is the workhorse: a translucent panel with a blurred
+   * backdrop and a hairline top highlight. It composes over whatever is
+   * behind it — the window's own background, or the desktop itself when
+   * native vibrancy is active.
+   *
+   * The backdrop-filter is the expensive part, so it is applied to a
+   * few large static surfaces (sidebar, headers, overlays) and
+   * deliberately not to list rows, where it would cost a repaint per
+   * row on every scroll.
+   */
+  .glass {
+    background-color: rgb(var(--glass-bg) / var(--glass-alpha));
+    backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    box-shadow: inset 0 1px 0 0 rgb(255 255 255 / var(--glass-highlight));
+  }
+
+  /* A panel that sits above the page rather than beside it. */
+  .glass-overlay {
+    background-color: rgb(var(--glass-bg) / 0.86);
+    backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+    @apply rounded-lg border shadow-overlay;
+  }
+
+  /* Two very low-opacity radial tints. This is what keeps a large dark
+     surface from reading as a flat black rectangle. */
+  .ambient {
+    background-image:
+      radial-gradient(
+        60rem 40rem at 15% -10%,
+        rgb(var(--ambient-1) / var(--ambient-alpha)),
+        transparent 60%
+      ),
+      radial-gradient(
+        50rem 30rem at 95% 5%,
+        rgb(var(--ambient-2) / var(--ambient-alpha)),
+        transparent 55%
+      );
+  }
+
+  /* ---- Primitives --------------------------------------------------- */
+
+  /* Row hover that does not shift layout or fight zebra striping. */
+  .row-hover {
+    @apply transition-colors duration-100 ease-swift;
+  }
+
+  .row-hover:hover {
+    background-color: rgb(var(--text) / 0.035);
   }
 }

@@ -26,7 +26,7 @@ const TABS: { id: Tab; label: string }[] = [
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex gap-2 py-1 text-sm">
-      <dt className="w-36 shrink-0 text-slate-500 dark:text-slate-400">
+      <dt className="w-36 shrink-0 text-content-muted">
         {label}
       </dt>
       <dd className="min-w-0 break-words">{value ?? "—"}</dd>
@@ -45,19 +45,19 @@ function Containers({
   return (
     <section className="mt-4">
       <h3 className="mb-1 text-sm font-semibold">{title}</h3>
-      <ul className="divide-y divide-slate-200 rounded border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+      <ul className="divide-y divide-hairline/[0.06] overflow-hidden rounded border">
         {containers.map((c) => (
           <li key={c.name} className="px-3 py-2 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span className="font-medium">{c.name}</span>
               <StatusDot
                 tone={
-                  c.ready ? "ok" : c.state.startsWith("Running") ? "warn" : "error"
+                  c.ready ? "ok" : c.state.startsWith("Running") ? "warn" : "danger"
                 }
                 label={c.state}
               />
             </div>
-            <p className="mt-0.5 truncate font-mono text-xs text-slate-500 dark:text-slate-400">
+            <p className="mt-0.5 truncate font-mono text-2xs text-content-muted">
               {c.image}
             </p>
             {/* The previous state is what explains a CrashLoopBackOff:
@@ -69,7 +69,7 @@ function Containers({
             )}
             {c.restarts > 0 && (
               <p className="mt-1">
-                <Chip tone={c.restarts > 5 ? "error" : "neutral"}>
+                <Chip tone={c.restarts > 5 ? "danger" : "neutral"}>
                   {c.restarts} restart{c.restarts === 1 ? "" : "s"}
                 </Chip>
               </p>
@@ -106,7 +106,7 @@ function Events({ namespace, name }: { namespace: string; name: string }) {
   return (
     <>
       {q.error != null && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+        <div className="animate-fade-in border-b border-danger/20 bg-danger/[0.08] px-4 py-2 text-xs text-danger">
           {errorMessage(q.error)}
         </div>
       )}
@@ -147,13 +147,13 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
 
   return (
     <section className="flex h-full flex-col">
-      <header className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+      <header className="drag-region glass border-b px-4 pb-3 pt-10">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={onClose}
-                className="rounded px-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="no-drag rounded-sm px-1.5 text-content-muted transition-colors hover:bg-content/[0.06] hover:text-content"
                 title="Back to pods"
               >
                 ←
@@ -163,27 +163,27 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
                 <StatusDot tone={phaseTone(pod.phase)} label={pod.phase} />
               )}
             </div>
-            <p className="truncate pl-7 text-xs text-slate-500 dark:text-slate-400">
+            <p className="truncate pl-8 text-2xs text-content-muted">
               {namespace}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="shrink-0 rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+            className="no-drag shrink-0 rounded-sm border px-2 py-1 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content"
           >
             Close
           </button>
         </div>
 
-        <nav className="mt-3 flex gap-1">
+        <nav className="no-drag mt-3 flex gap-1">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               className={`rounded px-2.5 py-1 text-sm transition-colors ${
                 tab === t.id
-                  ? "bg-accent text-accent-fg"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  ? "bg-accent/[0.14] font-medium text-content"
+                  : "text-content-secondary hover:bg-content/[0.05] hover:text-content"
               }`}
             >
               {t.label}
@@ -193,7 +193,7 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
       </header>
 
       {q.error != null && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+        <div className="animate-fade-in border-b border-danger/20 bg-danger/[0.08] px-4 py-2 text-xs text-danger">
           {errorMessage(q.error)}
         </div>
       )}
@@ -224,7 +224,7 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
                           label={`${c.type}: ${c.status}`}
                         />
                         {c.message && (
-                          <span className="ml-2 text-slate-500 dark:text-slate-400">
+                          <span className="ml-2 text-content-muted">
                             {c.message}
                           </span>
                         )}
