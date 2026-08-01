@@ -4,13 +4,17 @@ import { Sidebar, type View } from "./components/Sidebar";
 import { SkeletonBlock } from "./components/Skeleton";
 import { ContextPicker } from "./pages/ContextPicker";
 import { Namespaces, Nodes, Pods } from "./pages/Resources";
-import { CustomResources } from "./pages/CustomResources";
+import { Crds } from "./pages/Crds";
 import { Helm } from "./pages/Helm";
-import { api, type ClusterInfo } from "./lib/api";
+import { api, type ApiResourceInfo, type ClusterInfo } from "./lib/api";
 
 export default function App() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
   const [view, setView] = useState<View>("nodes");
+  // Owned here rather than inside the CRDs page: the sidebar selects a
+  // kind too, and two owners of one selection drift apart the moment
+  // either changes it.
+  const [crd, setCrd] = useState<ApiResourceInfo | null>(null);
   // Shown over a live connection when the user wants a different
   // cluster, so switching does not require disconnecting first.
   const [switching, setSwitching] = useState(false);
@@ -70,6 +74,8 @@ export default function App() {
         cluster={cluster}
         view={view}
         onSelect={setView}
+        crd={crd}
+        onSelectCrd={setCrd}
         onSwitchCluster={() => setSwitching(true)}
         onDisconnect={disconnect}
       />
@@ -77,7 +83,7 @@ export default function App() {
         {view === "nodes" && <Nodes />}
         {view === "namespaces" && <Namespaces />}
         {view === "pods" && <Pods />}
-        {view === "resources" && <CustomResources />}
+        {view === "crds" && <Crds resource={crd} onSelectKind={setCrd} />}
         {view === "helm" && <Helm />}
       </main>
     </div>

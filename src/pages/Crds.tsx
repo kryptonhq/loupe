@@ -16,12 +16,14 @@ import { ObjectDetail, statusTone } from "./ObjectDetail";
 
 // Browsing anything the cluster serves, discovered at runtime.
 //
-// Two panes in sequence: pick a kind, then look at its objects. The kind
-// list leads with custom resources — the built-ins have dedicated views
-// already, and an unfiltered list of seventy kinds buries the two an
-// operator installed an operator for.
+// The sidebar lists the custom kinds directly, so most visits arrive
+// here already knowing which one they want. This page is what you get
+// when you do not: an index of every kind, including the built-ins,
+// which the sidebar deliberately leaves out — seventy entries in a nav
+// rail is not a nav rail.
 
-function kindKey(r: ApiResourceInfo) {
+/// Stable identity for a kind, used as a row key and a query key.
+export function kindKey(r: ApiResourceInfo) {
   return `${r.group}/${r.version}/${r.kind}`;
 }
 
@@ -83,7 +85,7 @@ function Kinds({
 
   return (
     <Panel
-      title="Resources"
+      title="CRDs"
       subtitle="Every kind this cluster serves, from API discovery"
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
@@ -225,12 +227,19 @@ function Objects({
   );
 }
 
-export function CustomResources() {
-  const [kind, setKind] = useState<ApiResourceInfo | null>(null);
-
-  return kind ? (
-    <Objects resource={kind} onBack={() => setKind(null)} />
+/// The chosen kind lives in App, not here, because the sidebar selects
+/// it too — two owners of the same selection would drift apart the
+/// moment one of them changed it.
+export function Crds({
+  resource,
+  onSelectKind,
+}: {
+  resource: ApiResourceInfo | null;
+  onSelectKind: (resource: ApiResourceInfo | null) => void;
+}) {
+  return resource ? (
+    <Objects resource={resource} onBack={() => onSelectKind(null)} />
   ) : (
-    <Kinds onSelect={setKind} />
+    <Kinds onSelect={onSelectKind} />
   );
 }

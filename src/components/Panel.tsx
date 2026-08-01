@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { RefreshingDot } from "./Skeleton";
 import { errorMessage } from "../lib/api";
+import { dragRegionProps } from "../lib/window";
 
 // The frame every main-pane view sits in: a glass header that stays put,
 // an error strip, and a scrolling body.
@@ -27,7 +28,10 @@ export function Panel({
 }) {
   return (
     <section className="flex h-full flex-col">
-      <header className="drag-region glass flex items-center justify-between gap-3 border-b px-4 pb-3 pt-10">
+      <header
+        {...dragRegionProps}
+        className="drag-region glass flex items-center justify-between gap-3 border-b px-4 pb-3 pt-10"
+      >
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold tracking-tight">
             {title}

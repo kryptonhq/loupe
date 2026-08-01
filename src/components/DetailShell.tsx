@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { ErrorStrip } from "./Panel";
+import { dragRegionProps } from "../lib/window";
 
 // The frame every detail page sits in.
 //
@@ -57,7 +58,7 @@ export function DetailShell({
 
   return (
     <section className="flex h-full flex-col">
-      <header className="drag-region glass border-b px-4 pb-3 pt-10">
+      <header {...dragRegionProps} className="drag-region glass border-b px-4 pb-3 pt-10">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Logo } from "../components/Logo";
 import { Chip } from "../components/Chip";
 import { SkeletonBlock } from "../components/Skeleton";
+import { dragRegionProps } from "../lib/window";
 import {
   api,
   errorMessage,
@@ -72,7 +73,10 @@ export function ContextPicker({
   });
 
   return (
-    <div className="ambient drag-region flex h-full items-center justify-center p-8">
+    <div
+      {...dragRegionProps}
+      className="ambient drag-region flex h-full items-center justify-center p-8"
+    >
       <div className="no-drag w-full max-w-lg animate-slide-up">
         <div className="mb-6 flex flex-col items-center text-center">
           <Logo className="mb-3 h-14 w-14" />

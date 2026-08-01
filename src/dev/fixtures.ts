@@ -440,6 +440,10 @@ const FIXTURES: Record<string, unknown> = {
 export function installDemoBridge() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__TAURI_INTERNALS__ = {
+    // `getCurrentWindow()` reads its label from here. Without it the
+    // title-bar drag handlers throw on every mousedown instead of
+    // quietly doing nothing, which is what a browser should do.
+    metadata: { currentWindow: { label: "main" } },
     invoke: (cmd: string, args: Record<string, unknown> = {}) => {
       // Discovery is cached in Rust; the refresh command returns the
       // same shape, so the demo shares one fixture.
