@@ -1,7 +1,12 @@
 import { Logo } from "./Logo";
 import type { ClusterInfo } from "../lib/api";
 
-export type View = "nodes" | "namespaces" | "pods";
+export type View =
+  | "nodes"
+  | "namespaces"
+  | "pods"
+  | "resources"
+  | "helm";
 
 // Each resource gets a mark rather than an icon font. The references
 // that read well all use colour to make the left rail scannable — you
@@ -10,6 +15,8 @@ const ITEMS: { id: View; label: string; tint: string; glyph: string }[] = [
   { id: "nodes", label: "Nodes", tint: "text-info", glyph: "▤" },
   { id: "namespaces", label: "Namespaces", tint: "text-accent", glyph: "◇" },
   { id: "pods", label: "Pods", tint: "text-success", glyph: "◉" },
+  { id: "resources", label: "Resources", tint: "text-warn", glyph: "❖" },
+  { id: "helm", label: "Helm", tint: "text-info", glyph: "⎈" },
 ];
 
 interface SidebarProps {

@@ -4,6 +4,8 @@ import { Sidebar, type View } from "./components/Sidebar";
 import { SkeletonBlock } from "./components/Skeleton";
 import { ContextPicker } from "./pages/ContextPicker";
 import { Namespaces, Nodes, Pods } from "./pages/Resources";
+import { CustomResources } from "./pages/CustomResources";
+import { Helm } from "./pages/Helm";
 import { api, type ClusterInfo } from "./lib/api";
 
 export default function App() {
@@ -75,6 +77,8 @@ export default function App() {
         {view === "nodes" && <Nodes />}
         {view === "namespaces" && <Namespaces />}
         {view === "pods" && <Pods />}
+        {view === "resources" && <CustomResources />}
+        {view === "helm" && <Helm />}
       </main>
     </div>
   );

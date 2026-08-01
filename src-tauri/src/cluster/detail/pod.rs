@@ -1,16 +1,12 @@
-//! Detail views: the full picture of a single resource.
-//!
-//! List views summarise; this module does the opposite. It returns the
-//! fields an operator reads when something is wrong — container states
-//! with their termination reasons, conditions, the scheduling node — plus
-//! the raw YAML, because eventually every investigation ends in the YAML.
+//! Pod detail: container states, conditions, and the rendered YAML.
 
-use k8s_openapi::api::core::v1::{Event, Pod};
-use kube::api::{Api, ListParams, ResourceExt};
+use k8s_openapi::api::core::v1::Pod;
+use kube::api::{Api, ResourceExt};
 use serde::Serialize;
 
+use crate::cluster::detail::{sorted_pairs, to_yaml, ConditionView};
 use crate::cluster::{resources::age, Session};
-use crate::error::{AppError, Result};
+use crate::error::Result;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,16 +27,11 @@ pub struct ContainerView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConditionView {
-    pub type_: String,
-    pub status: String,
-    pub reason: Option<String>,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PodDetail {
+    /// Identity for the YAML editor. Carried on the payload rather than
+    /// hardcoded in the frontend so every detail view saves the same way.
+    pub api_version: String,
+    pub kind: String,
     pub name: String,
     pub namespace: String,
     pub phase: String,
@@ -56,17 +47,6 @@ pub struct PodDetail {
     pub conditions: Vec<ConditionView>,
     /// Rendered server-side so the webview never needs a YAML library.
     pub yaml: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EventView {
-    pub type_: String,
-    pub reason: Option<String>,
-    pub message: Option<String>,
-    pub count: Option<i32>,
-    pub age: Option<String>,
-    pub source: Option<String>,
 }
 
 /// Flattens a container status into one readable line.
@@ -118,28 +98,6 @@ fn containers_from(
         .unwrap_or_default()
 }
 
-fn sorted_pairs(map: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
-    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-}
-
-/// Best available timestamp for an event, in epoch seconds.
-///
-/// `lastTimestamp` is what kubectl shows and is what changes when a
-/// repeated event fires again, so it wins over `creationTimestamp` —
-/// otherwise a CrashLoopBackOff event that has fired 400 times would
-/// keep sorting to the bottom by its original creation time.
-fn event_time(e: &Event) -> Option<i64> {
-    // Time and MicroTime are distinct types but both wrap a
-    // jiff::Timestamp, so each is read on its own terms.
-    if let Some(t) = &e.last_timestamp {
-        return Some(t.0.as_second());
-    }
-    if let Some(t) = &e.event_time {
-        return Some(t.0.as_second());
-    }
-    e.creation_timestamp().map(|t| t.0.as_second())
-}
-
 pub async fn get_pod(session: &Session, namespace: &str, name: &str) -> Result<PodDetail> {
     let client = session.client().await?;
     let api: Api<Pod> = Api::namespaced(client, namespace);
@@ -149,13 +107,14 @@ pub async fn get_pod(session: &Session, namespace: &str, name: &str) -> Result<P
     // push the interesting spec off the screen and that nobody reads.
     pod.metadata.managed_fields = None;
 
-    let yaml =
-        serde_yaml::to_string(&pod).map_err(|e| AppError::Kube(format!("render yaml: {e}")))?;
+    let yaml = to_yaml(&pod)?;
 
     let status = pod.status.clone();
     let spec = pod.spec.clone();
 
     Ok(PodDetail {
+        api_version: "v1".into(),
+        kind: "Pod".into(),
         age: age(&pod),
         name: pod.name_any(),
         namespace: pod.namespace().unwrap_or_default(),
@@ -193,55 +152,10 @@ pub async fn get_pod(session: &Session, namespace: &str, name: &str) -> Result<P
     })
 }
 
-/// Events for one object, newest first.
-///
-/// Filtered server-side with a field selector so a busy namespace does
-/// not ship thousands of unrelated events across the IPC boundary.
-pub async fn list_events(
-    session: &Session,
-    namespace: &str,
-    object_name: &str,
-) -> Result<Vec<EventView>> {
-    let client = session.client().await?;
-    let api: Api<Event> = Api::namespaced(client, namespace);
-    let params = ListParams::default().fields(&format!("involvedObject.name={object_name}"));
-    let list = api.list(&params).await?;
-
-    // The API returns events in arbitrary order and operators want the
-    // most recent first, so sort explicitly. Sorting on the rendered age
-    // string would order "2m" before "10s" — the key has to be the
-    // timestamp. An event with no timestamp sorts last rather than
-    // pretending to be from the epoch.
-    let mut events: Vec<(i64, EventView)> = list
-        .into_iter()
-        .map(|e| {
-            let ts = event_time(&e).unwrap_or(i64::MIN);
-            (
-                ts,
-                EventView {
-                    age: age(&e),
-                    type_: e.type_.clone().unwrap_or_else(|| "Normal".into()),
-                    reason: e.reason.clone(),
-                    message: e.message.clone(),
-                    count: e.count,
-                    source: e
-                        .source
-                        .as_ref()
-                        .and_then(|s| s.component.clone())
-                        .or_else(|| e.reporting_component.clone()),
-                },
-            )
-        })
-        .collect();
-
-    // Reverse rather than a flipped comparator: newest first, said once.
-    events.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
-    Ok(events.into_iter().map(|(_, v)| v).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::detail::list_events;
     use k8s_openapi::api::core::v1::{
         ContainerState, ContainerStateTerminated, ContainerStateWaiting,
     };
@@ -285,13 +199,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a reachable cluster; set LOUPE_TEST_CONTEXT"]
     async fn reads_a_live_pod_detail_and_events() {
-        let context = std::env::var("LOUPE_TEST_CONTEXT")
-            .expect("set LOUPE_TEST_CONTEXT to a context in your kubeconfig");
-
-        let session = Session::default();
-        crate::cluster::connect(&session, &context)
-            .await
-            .expect("connect");
+        let session = crate::cluster::live::session().await;
 
         let pods = crate::cluster::resources::list_pods(&session, Some("kube-system".into()))
             .await
@@ -309,6 +217,7 @@ mod tests {
         );
 
         assert_eq!(detail.name, target.name);
+        assert_eq!(detail.kind, "Pod");
         assert!(!detail.containers.is_empty(), "a pod has containers");
         assert!(detail.yaml.contains("apiVersion:"), "yaml should render");
         // managedFields is stripped for readability; if it reappears the
@@ -325,20 +234,5 @@ mod tests {
             .await
             .expect("list events");
         println!("{} event(s) for {}", events.len(), target.name);
-    }
-
-    #[test]
-    fn condition_and_event_type_serialise_as_type() {
-        // The frontend reads `type`; if serde emits anything else the
-        // column renders as "undefined".
-        let c = ConditionView {
-            type_: "Ready".into(),
-            status: "True".into(),
-            reason: None,
-            message: None,
-        };
-        let json = serde_json::to_string(&c).unwrap();
-        println!("ConditionView -> {json}");
-        assert!(json.contains("\"type\":\"Ready\""), "got {json}");
     }
 }

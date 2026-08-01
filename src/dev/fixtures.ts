@@ -57,6 +57,57 @@ status:
   restartCount: 0
   reason: null`;
 
+const NODE_YAML = `apiVersion: v1
+kind: Node
+metadata:
+  name: orbstack
+  labels:
+    kubernetes.io/arch: arm64
+    node-role.kubernetes.io/control-plane: "true"
+  resourceVersion: "184203"
+spec:
+  podCIDR: 192.168.194.0/24
+status:
+  allocatable:
+    cpu: "12"
+    memory: 8146356Ki
+    pods: "110"
+  nodeInfo:
+    architecture: arm64
+    kubeletVersion: v1.34.8+orb1
+    osImage: OrbStack 1.13.1`;
+
+const NAMESPACE_YAML = `apiVersion: v1
+kind: Namespace
+metadata:
+  name: krypton-system
+  labels:
+    kubernetes.io/metadata.name: krypton-system
+  resourceVersion: "9021"
+spec:
+  finalizers:
+    - kubernetes
+status:
+  phase: Active`;
+
+const AGENT_YAML = `apiVersion: krypton.ai/v1alpha1
+kind: Agent
+metadata:
+  name: mcp-hello
+  namespace: agents
+  resourceVersion: "77412"
+spec:
+  mode: always-on
+  replicas: 1
+  model: qwen2-0-5b
+status:
+  phase: Ready
+  replicas: 1
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: RolloutComplete`;
+
 const POD_NAMES: [string, string, string][] = [
   ["coredns-58db975755-wbhbz", "kube-system", "Running"],
   ["coredns-58db975755-k2xqv", "kube-system", "Running"],
@@ -120,7 +171,10 @@ const FIXTURES: Record<string, unknown> = {
     "local-path-storage",
   ].map((name) => ({ name, phase: "Active", age: "65d" })),
   list_pods: pods,
+  list_pods_on_node: pods,
   get_pod: {
+    apiVersion: "v1",
+    kind: "Pod",
     name: "coredns-58db975755-wbhbz",
     namespace: "kube-system",
     phase: "Running",
@@ -162,6 +216,7 @@ const FIXTURES: Record<string, unknown> = {
       count: 1,
       age: "65d",
       source: "default-scheduler",
+      object: "Pod/coredns-58db975755-wbhbz",
     },
     {
       type: "Normal",
@@ -170,6 +225,7 @@ const FIXTURES: Record<string, unknown> = {
       count: 1,
       age: "65d",
       source: "kubelet",
+      object: "Pod/coredns-58db975755-wbhbz",
     },
     {
       type: "Normal",
@@ -178,6 +234,7 @@ const FIXTURES: Record<string, unknown> = {
       count: 1,
       age: "65d",
       source: "kubelet",
+      object: "Pod/coredns-58db975755-wbhbz",
     },
     {
       type: "Warning",
@@ -186,8 +243,192 @@ const FIXTURES: Record<string, unknown> = {
       count: 3,
       age: "64d",
       source: "kubelet",
+      object: "Pod/coredns-58db975755-wbhbz",
     },
   ],
+  get_node: {
+    apiVersion: "v1",
+    kind: "Node",
+    name: "orbstack",
+    ready: true,
+    schedulable: true,
+    roles: ["control-plane", "master", "etcd"],
+    version: "v1.34.8+orb1",
+    age: "65d",
+    addresses: [
+      ["InternalIP", "198.19.249.2"],
+      ["Hostname", "orbstack"],
+    ],
+    osImage: "OrbStack 1.13.1",
+    kernelVersion: "6.19.2-orbstack",
+    containerRuntime: "containerd://2.1.6",
+    architecture: "arm64",
+    operatingSystem: "linux",
+    capacity: [
+      ["cpu", "12"],
+      ["ephemeral-storage", "460479488Ki"],
+      ["memory", "8146356Ki"],
+      ["pods", "110"],
+    ],
+    allocatable: [
+      ["cpu", "12"],
+      ["ephemeral-storage", "460479488Ki"],
+      ["memory", "8146356Ki"],
+      ["pods", "110"],
+    ],
+    allocated: [
+      {
+        name: "CPU",
+        requests: "850m",
+        requestsPercent: 7,
+        limits: "2",
+        limitsPercent: 17,
+        allocatable: "12",
+      },
+      {
+        name: "Memory",
+        requests: "1.2Gi",
+        requestsPercent: 16,
+        limits: "2.5Gi",
+        limitsPercent: 33,
+        allocatable: "7.8Gi",
+      },
+    ],
+    taints: [],
+    conditions: [
+      { type: "MemoryPressure", status: "False", reason: "KubeletHasSufficientMemory", message: null },
+      { type: "DiskPressure", status: "False", reason: "KubeletHasNoDiskPressure", message: null },
+      { type: "Ready", status: "True", reason: "KubeletReady", message: "kubelet is posting ready status" },
+    ],
+    labels: [
+      ["kubernetes.io/arch", "arm64"],
+      ["kubernetes.io/hostname", "orbstack"],
+      ["node-role.kubernetes.io/control-plane", "true"],
+    ],
+    annotations: [],
+    podCount: pods.length,
+    yaml: NODE_YAML,
+  },
+  get_namespace: {
+    apiVersion: "v1",
+    kind: "Namespace",
+    name: "krypton-system",
+    phase: "Active",
+    age: "12d",
+    labels: [["kubernetes.io/metadata.name", "krypton-system"]],
+    annotations: [],
+    finalizers: [],
+    podCount: 4,
+    podsByPhase: [{ phase: "Running", count: 4 }],
+    quotas: [
+      {
+        name: "compute",
+        entries: [
+          { resource: "limits.cpu", used: "1200m", hard: "4" },
+          { resource: "limits.memory", used: "2Gi", hard: "8Gi" },
+          { resource: "pods", used: "4", hard: "20" },
+        ],
+      },
+    ],
+    yaml: NAMESPACE_YAML,
+  },
+  list_namespace_events: [
+    {
+      type: "Warning",
+      reason: "FailedScheduling",
+      message: "0/1 nodes are available: 1 Insufficient memory.",
+      count: 12,
+      age: "8m",
+      source: "default-scheduler",
+      object: "Pod/qwen2-0-5b-model-5d7c8f9b6-xp4tv",
+    },
+    {
+      type: "Normal",
+      reason: "ScalingReplicaSet",
+      message: "Scaled up replica set krypton-gateway-5f8b7d6c9 to 1",
+      count: 1,
+      age: "12d",
+      source: "deployment-controller",
+      object: "Deployment/krypton-gateway",
+    },
+  ],
+  list_api_resources: [
+    { group: "krypton.ai", version: "v1alpha1", kind: "Agent", plural: "agents", apiVersion: "krypton.ai/v1alpha1", namespaced: true, verbs: ["get", "list", "watch", "create", "update", "patch", "delete"], custom: true },
+    { group: "krypton.ai", version: "v1alpha1", kind: "Model", plural: "models", apiVersion: "krypton.ai/v1alpha1", namespaced: true, verbs: ["get", "list", "watch", "create", "update", "patch", "delete"], custom: true },
+    { group: "monitoring.coreos.com", version: "v1", kind: "ServiceMonitor", plural: "servicemonitors", apiVersion: "monitoring.coreos.com/v1", namespaced: true, verbs: ["get", "list", "watch", "create", "update"], custom: true },
+    { group: "monitoring.coreos.com", version: "v1", kind: "Prometheus", plural: "prometheuses", apiVersion: "monitoring.coreos.com/v1", namespaced: true, verbs: ["get", "list", "watch"], custom: true },
+    { group: "", version: "v1", kind: "Pod", plural: "pods", apiVersion: "v1", namespaced: true, verbs: ["get", "list", "watch", "create", "update", "patch", "delete"], custom: false },
+    { group: "apps", version: "v1", kind: "Deployment", plural: "deployments", apiVersion: "apps/v1", namespaced: true, verbs: ["get", "list", "watch", "create", "update", "patch", "delete"], custom: false },
+    { group: "rbac.authorization.k8s.io", version: "v1", kind: "ClusterRole", plural: "clusterroles", apiVersion: "rbac.authorization.k8s.io/v1", namespaced: false, verbs: ["get", "list", "watch"], custom: false },
+  ],
+  list_objects: [
+    { name: "mcp-hello", namespace: "agents", age: "65d", status: "Ready" },
+    { name: "echo-agent", namespace: "agents", age: "3d", status: "Ready" },
+    { name: "summarizer", namespace: "agents", age: "8m", status: "NotReady: ModelPullFailed" },
+  ],
+  get_object: {
+    apiVersion: "krypton.ai/v1alpha1",
+    kind: "Agent",
+    name: "mcp-hello",
+    namespace: "agents",
+    age: "65d",
+    status: "Ready",
+    labels: [["app.kubernetes.io/managed-by", "krypton"]],
+    annotations: [],
+    conditions: [
+      { type: "Ready", status: "True", reason: "RolloutComplete", message: "1/1 replicas available" },
+      { type: "ModelResolved", status: "True", reason: null, message: null },
+    ],
+    editable: true,
+    yaml: AGENT_YAML,
+  },
+  list_helm_releases: [
+    {
+      name: "krypton",
+      namespace: "krypton-system",
+      revision: 3,
+      status: "deployed",
+      chart: "krypton-0.0.4",
+      appVersion: "0.0.4",
+      updated: "12d",
+      description: "Upgrade complete",
+    },
+    {
+      name: "prom",
+      namespace: "monitoring",
+      revision: 1,
+      status: "deployed",
+      chart: "kube-prometheus-stack-85.3.3",
+      appVersion: "v0.87.0",
+      updated: "66d",
+      description: "Install complete",
+    },
+  ],
+  get_helm_release: {
+    name: "krypton",
+    namespace: "krypton-system",
+    revision: 3,
+    status: "deployed",
+    chart: "krypton-0.0.4",
+    chartName: "krypton",
+    chartVersion: "0.0.4",
+    appVersion: "0.0.4",
+    updated: "12d",
+    firstDeployed: "44d",
+    description: "Upgrade complete",
+    chartDescription: "The Krypton control plane",
+    home: "https://github.com/kryptonhq/krypton",
+    notes:
+      "Krypton is installed.\n\n  kubectl --namespace krypton-system get pods\n\nReach the gateway:\n\n  kubectl --namespace krypton-system port-forward svc/krypton-gateway 8080:80\n",
+    values: "gateway:\n  replicas: 1\npostgres:\n  persistence:\n    size: 8Gi\n",
+    manifest:
+      "---\napiVersion: v1\nkind: Service\nmetadata:\n  name: krypton-gateway\n  namespace: krypton-system\nspec:\n  ports:\n    - port: 80\n      targetPort: 8080\n",
+    history: [
+      { revision: 3, status: "deployed", chart: "krypton-0.0.4", appVersion: "0.0.4", updated: "12d", description: "Upgrade complete" },
+      { revision: 2, status: "superseded", chart: "krypton-0.0.3", appVersion: "0.0.3", updated: "30d", description: "Upgrade complete" },
+      { revision: 1, status: "superseded", chart: "krypton-0.0.2", appVersion: "0.0.2", updated: "44d", description: "Install complete" },
+    ],
+  },
   disconnect: null,
   // A browser has no native window to make translucent. Without this
   // the fallback `[]` would apply, and an empty array is truthy.
@@ -199,8 +440,23 @@ const FIXTURES: Record<string, unknown> = {
 export function installDemoBridge() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__TAURI_INTERNALS__ = {
-    invoke: (cmd: string) =>
-      Promise.resolve(cmd in FIXTURES ? FIXTURES[cmd] : []),
+    invoke: (cmd: string, args: Record<string, unknown> = {}) => {
+      // Discovery is cached in Rust; the refresh command returns the
+      // same shape, so the demo shares one fixture.
+      if (cmd === "refresh_api_resources") {
+        return Promise.resolve(FIXTURES.list_api_resources);
+      }
+      // The demo has no cluster to write to, so an apply echoes the
+      // edit back. That still exercises the editor's success path —
+      // apply, leave edit mode, re-render with what was stored.
+      if (cmd === "apply_yaml") {
+        return Promise.resolve({
+          yaml: String(args.yaml ?? ""),
+          resourceVersion: "demo",
+        });
+      }
+      return Promise.resolve(cmd in FIXTURES ? FIXTURES[cmd] : []);
+    },
     transformCallback: (cb: unknown) => cb,
   };
   // Loud on purpose: nothing on screen is real, and it should be

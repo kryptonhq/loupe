@@ -33,9 +33,21 @@ require Krypton Runtime to be installed.
 ## What works today
 
 - Kubeconfig context discovery, connecting, and switching cluster
-- Read-only views for nodes, namespaces and pods, with search and paging
+- Views for nodes, namespaces and pods, with search and paging
 - Pod detail: containers and their termination reasons, conditions,
   labels, events, and the manifest
+- Node detail: allocated CPU and memory against what the scheduler has
+  left, taints, pressure conditions, and the pods scheduled there
+- Namespace detail: pod health at a glance, ResourceQuota headroom,
+  finalizers when a namespace will not go away, and everything
+  happening inside it
+- Any custom resource, discovered from the cluster's own API — a CRD
+  installed a minute ago is browsable without a new build
+- Helm releases read straight from the release secrets: values, rendered
+  manifest, notes and revision history, with no `helm` binary needed
+- Editing: the YAML tab writes back as a full replace, so an object
+  someone else changed underneath you is rejected rather than silently
+  overwritten. Deleting is deliberately not implemented yet
 - Pod logs, streamed live — with container selection, timestamps, and
   `previous` for reading why a crashed container died
 

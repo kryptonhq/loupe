@@ -62,12 +62,36 @@ async fn list_nodes(
 }
 
 #[tauri::command]
+async fn list_pods_on_node(
+    session: tauri::State<'_, SharedSession>,
+    node: String,
+) -> Result<Vec<cluster::resources::PodSummary>> {
+    cluster::resources::list_pods_on_node(session.inner(), &node).await
+}
+
+#[tauri::command]
 async fn get_pod(
     session: tauri::State<'_, SharedSession>,
     namespace: String,
     name: String,
-) -> Result<cluster::detail::PodDetail> {
-    cluster::detail::get_pod(session.inner(), &namespace, &name).await
+) -> Result<cluster::detail::pod::PodDetail> {
+    cluster::detail::pod::get_pod(session.inner(), &namespace, &name).await
+}
+
+#[tauri::command]
+async fn get_node(
+    session: tauri::State<'_, SharedSession>,
+    name: String,
+) -> Result<cluster::detail::node::NodeDetail> {
+    cluster::detail::node::get_node(session.inner(), &name).await
+}
+
+#[tauri::command]
+async fn get_namespace(
+    session: tauri::State<'_, SharedSession>,
+    name: String,
+) -> Result<cluster::detail::namespace::NamespaceDetail> {
+    cluster::detail::namespace::get_namespace(session.inner(), &name).await
 }
 
 #[tauri::command]
@@ -77,6 +101,82 @@ async fn list_events(
     name: String,
 ) -> Result<Vec<cluster::detail::EventView>> {
     cluster::detail::list_events(session.inner(), &namespace, &name).await
+}
+
+/// Everything happening in a namespace, rather than to it.
+#[tauri::command]
+async fn list_namespace_events(
+    session: tauri::State<'_, SharedSession>,
+    namespace: String,
+) -> Result<Vec<cluster::detail::EventView>> {
+    cluster::detail::list_namespace_events(session.inner(), &namespace).await
+}
+
+#[tauri::command]
+async fn list_api_resources(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<cluster::discovery::ApiResourceInfo>> {
+    cluster::discovery::list_api_resources(session.inner()).await
+}
+
+/// Discards the cached API surface, so a CRD installed since connecting
+/// becomes visible without reconnecting.
+#[tauri::command]
+async fn refresh_api_resources(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<cluster::discovery::ApiResourceInfo>> {
+    session.inner().refresh_discovery().await?;
+    cluster::discovery::list_api_resources(session.inner()).await
+}
+
+#[tauri::command]
+async fn list_objects(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+) -> Result<Vec<cluster::discovery::ObjectSummary>> {
+    cluster::discovery::list_objects(session.inner(), resource, namespace).await
+}
+
+#[tauri::command]
+async fn get_object(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<cluster::discovery::ObjectDetail> {
+    cluster::discovery::get_object(session.inner(), resource, namespace, &name).await
+}
+
+/// Writes an edited object back, as a full replace.
+///
+/// The target is carried alongside the text so the apply can refuse an
+/// edit that has been retargeted at a different object — see
+/// `cluster::edit` for why that matters.
+#[tauri::command]
+async fn apply_yaml(
+    session: tauri::State<'_, SharedSession>,
+    target: cluster::edit::EditTarget,
+    yaml: String,
+) -> Result<cluster::edit::ApplyResult> {
+    cluster::edit::apply_yaml(session.inner(), target, &yaml).await
+}
+
+#[tauri::command]
+async fn list_helm_releases(
+    session: tauri::State<'_, SharedSession>,
+    namespace: Option<String>,
+) -> Result<Vec<cluster::helm::ReleaseSummary>> {
+    cluster::helm::list_releases(session.inner(), namespace).await
+}
+
+#[tauri::command]
+async fn get_helm_release(
+    session: tauri::State<'_, SharedSession>,
+    namespace: String,
+    name: String,
+) -> Result<cluster::helm::ReleaseDetail> {
+    cluster::helm::get_release(session.inner(), &namespace, &name).await
 }
 
 /// Starts a log stream and returns its id. Lines arrive on `channel`.
@@ -131,9 +231,20 @@ pub fn run() {
             disconnect,
             list_namespaces,
             list_pods,
+            list_pods_on_node,
             list_nodes,
             get_pod,
+            get_node,
+            get_namespace,
             list_events,
+            list_namespace_events,
+            list_api_resources,
+            refresh_api_resources,
+            list_objects,
+            get_object,
+            apply_yaml,
+            list_helm_releases,
+            get_helm_release,
             start_pod_logs,
             stop_pod_logs,
             vibrancy_enabled,

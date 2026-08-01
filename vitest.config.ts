@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    setupFiles: ["./src/test/setup.ts"],
     // src-tauri holds Rust; its tests run under cargo.
     exclude: ["node_modules/**", "src-tauri/**", "dist/**"],
   },
