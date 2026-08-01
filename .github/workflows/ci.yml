@@ -1,0 +1,137 @@
+name: ci
+
+# Kept deliberately lean. The aggregate `ci` job at the bottom is the
+# single status name to require in branch protection.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+
+jobs:
+  # Loupe uses the DCO rather than a CLA, so every commit must carry a
+  # Signed-off-by line. Checked in CI because retrofitting sign-off
+  # across a merged history is far more painful than catching it here.
+  dco:
+    name: DCO
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the PR's commits, not just the merge commit.
+          fetch-depth: 0
+
+      - name: Check sign-off on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%B' "$sha" | grep -qiE "^Signed-off-by: .+ <.+@.+>"; then
+              echo "::error::$(git show -s --format='%h %s' "$sha") is missing a Signed-off-by line"
+              missing=1
+            elif ! git show -s --format='%B' "$sha" | grep -qiF "Signed-off-by: $author"; then
+              # A sign-off from someone other than the author is allowed
+              # (co-authored work), so warn rather than fail.
+              echo "::warning::$(git show -s --format='%h' "$sha") sign-off does not match the author ($author)"
+            fi
+          done < <(git rev-list "$BASE..$HEAD")
+
+          if [ "$missing" -ne 0 ]; then
+            echo
+            echo "Sign off your commits with: git commit -s"
+            echo "To fix a branch:            git rebase --signoff ${BASE}"
+            exit 1
+          fi
+          echo "All commits are signed off."
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tauri needs system webkit to build on Linux.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libglib2.0-dev
+
+      - name: Format
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      # The cluster-backed tests are #[ignore]d and stay that way here:
+      # CI has no cluster, and a test that silently needs one is worse
+      # than a test that is honestly skipped.
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  web:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      # `pnpm build` runs tsc first, so this is the typecheck too.
+      - run: pnpm build
+
+  ci:
+    name: ci
+    if: always()
+    needs: [dco, rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["RESULTS"])
+          for name, job in sorted(needs.items()):
+              print(f"  {job['result']:>10}  {name}")
+          # dco is skipped on push; that is expected, not a failure.
+          failed = sorted(
+              n for n, j in needs.items()
+              if j["result"] not in ("success", "skipped")
+          )
+          if failed:
+              print(f"\nfailing: {', '.join(failed)}")
+              sys.exit(1)
+          print("\nall checks passed")
+          PY

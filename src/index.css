@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    font-family:
+      "Inter",
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+    @apply bg-white text-slate-900;
+    /* The window chrome is ours; native text selection on chrome and
+       the drag region reads as a bug in a desktop app. */
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  .dark body {
+    @apply bg-slate-950 text-slate-100;
+  }
+}
+
+@layer components {
+  /* Anything inside the title bar should drag the window, except
+     controls, which opt back out with .no-drag. */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}

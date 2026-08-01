@@ -1,0 +1,44 @@
+<!-- Krypton favicon — indigo disc with the full Rubik mark in white.
+     Same geometry as the brand avatar / docs navbar so the favicon
+     reads as the exact same brand at every size. Uses the 200×200
+     viewBox so vectors scale cleanly down to 16 px tabs. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="100" fill="#6366f1"/>
+  <g fill="#ffffff">
+    <path fill-rule="evenodd" d="
+      M100 20 L169.28 60 L169.28 140 L100 180 L30.72 140 L30.72 60 Z
+      M100 42 L150.23 71 L150.23 129 L100 158 L49.77 129 L49.77 71 Z"/>
+  </g>
+  <g fill="none" stroke="#ffffff" stroke-width="1">
+    <path d="M100 76 L120.78 88 L120.78 112 L100 124 L79.22 112 L79.22 88 Z"/>
+    <line x1="100" y1="100" x2="120.78" y2="88"/>
+    <line x1="100" y1="100" x2="79.22" y2="88"/>
+    <line x1="100" y1="100" x2="100" y2="124"/>
+    <g stroke-opacity=".55">
+      <line x1="93.07" y1="80" x2="113.85" y2="92"/>
+      <line x1="86.15" y1="84" x2="106.93" y2="96"/>
+      <line x1="106.93" y1="80" x2="86.15" y2="92"/>
+      <line x1="113.85" y1="84" x2="93.07" y2="96"/>
+      <line x1="120.78" y1="96" x2="100" y2="108"/>
+      <line x1="120.78" y1="104" x2="100" y2="116"/>
+      <line x1="113.85" y1="92" x2="113.85" y2="116"/>
+      <line x1="106.93" y1="96" x2="106.93" y2="120"/>
+      <line x1="79.22" y1="96" x2="100" y2="108"/>
+      <line x1="79.22" y1="104" x2="100" y2="116"/>
+      <line x1="86.15" y1="92" x2="86.15" y2="116"/>
+      <line x1="93.07" y1="96" x2="93.07" y2="120"/>
+    </g>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="100" cy="80" r="1.8"/><circle cx="106.93" cy="84" r="1.8"/>
+    <circle cx="93.07" cy="84" r="1.8"/><circle cx="100" cy="88" r="1.8"/>
+    <circle cx="106.93" cy="92" r="1.8"/><circle cx="86.15" cy="88" r="1.8"/>
+    <circle cx="100" cy="96" r="1.8"/>
+    <circle cx="117.32" cy="110" r="1.8"/><circle cx="110.39" cy="114" r="1.8"/>
+    <circle cx="117.32" cy="102" r="1.8"/><circle cx="103.46" cy="110" r="1.8"/>
+    <circle cx="110.39" cy="98" r="1.8"/><circle cx="103.46" cy="102" r="1.8"/>
+    <circle cx="82.68" cy="110" r="1.8"/><circle cx="96.54" cy="118" r="1.8"/>
+    <circle cx="82.68" cy="102" r="1.8"/><circle cx="89.61" cy="106" r="1.8"/>
+    <circle cx="89.61" cy="98" r="1.8"/><circle cx="96.54" cy="102" r="1.8"/>
+  </g>
+</svg>
