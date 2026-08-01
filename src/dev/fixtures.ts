@@ -476,6 +476,10 @@ const FIXTURES: Record<string, unknown> = {
       { key: "NodeHosts", bytes: 34, binary: false, value: "198.19.249.2 orbstack\n" },
     ],
   },
+  // Browser dev has no config directory; following the system is the
+  // same fallback the app uses when the file is missing.
+  get_settings: { theme: "system" },
+  set_theme: { theme: "system" },
   disconnect: null,
   // A browser has no native window to make translucent. Without this
   // the fallback `[]` would apply, and an empty array is truthy.

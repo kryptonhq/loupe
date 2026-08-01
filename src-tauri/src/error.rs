@@ -39,6 +39,11 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
 
+    /// Preferences could not be read or written. Never fatal: the app
+    /// falls back to defaults and says so rather than refusing to start.
+    #[error("settings: {0}")]
+    Settings(String),
+
     /// The API server rejected or failed the request. Carries the
     /// original message so RBAC denials stay legible to the user.
     #[error("kubernetes: {0}")]
@@ -55,6 +60,7 @@ impl AppError {
             AppError::UnknownResource(_) => "unknown_resource",
             AppError::InvalidEdit(_) => "invalid_edit",
             AppError::Conflict(_) => "conflict",
+            AppError::Settings(_) => "settings",
             AppError::Kube(_) => "kubernetes",
         }
     }

@@ -62,6 +62,8 @@ require Krypton Runtime to be installed.
 - Editing: the YAML tab writes back as a full replace, so an object
   someone else changed underneath you is rejected rather than silently
   overwritten. Deleting is deliberately not implemented yet
+- Light, dark, or follow-the-system appearance, remembered in
+  `settings.json` beside the app's other config
 - Pod logs, streamed live — with container selection, timestamps, and
   `previous` for reading why a crashed container died
 
