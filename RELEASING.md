@@ -93,8 +93,14 @@ base64 -i DeveloperID.p12 | pbcopy
 ```
 
 When they are all present Tauri signs with the real identity and
-notarises. When `APPLE_SIGNING_IDENTITY` is absent the workflow passes
-`-` instead, which is the ad-hoc case above.
+notarises; otherwise it ad-hoc signs.
+
+The workflow chooses between those with two separate build steps rather
+than one step and a fallback value. An unset secret is still a *defined*
+environment variable — the empty string, not absent — and Tauri reads a
+defined `APPLE_CERTIFICATE` as "there is a certificate to import", then
+fails on `security import` with nothing to import. The certificate
+variables therefore only exist when there is a certificate.
 
 ### Windows
 

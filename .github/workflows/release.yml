@@ -152,24 +152,53 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # An unset secret is still a *defined* environment variable — it is
+      # the empty string, not absent — and Tauri reads a defined
+      # APPLE_CERTIFICATE as "there is a certificate to import". It then
+      # runs `security import` on nothing and the build dies with
+      # "failed to import keychain certificate".
+      #
+      # So the certificate variables are only allowed to exist when
+      # there is a certificate, which needs two build steps rather than
+      # one conditional expression.
+      - id: signing
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+            echo "mode=certificate" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      # The usual path today: no certificate anywhere.
+      #
+      # The explicit "-" matters more than it looks. Left entirely alone
+      # Tauri does not codesign the bundle at all, and the only signature
+      # is the linker's — which macOS reads as *malformed* and reports as
+      # "Loupe is damaged and can't be opened", pointing the user at a
+      # corrupt download rather than at an unsigned app. Ad-hoc signing
+      # produces a valid signature with the hardened runtime, so the app
+      # is refused for the reason it actually is: not notarised.
+      #
+      # Ignored on Linux and Windows, which have no such concept.
       - uses: tauri-apps/tauri-action@v0
+        if: steps.signing.outputs.mode == 'adhoc'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing and notarisation. The six secrets go together;
-          # with all of them Tauri signs with the real identity and
-          # notarises, and with none of them it falls back to "-".
-          #
-          # That fallback matters more than it looks. Left to itself
-          # Tauri does not codesign the bundle at all, and the only
-          # signature is the linker's — which macOS reads as *malformed*
-          # and reports as "Loupe is damaged and can't be opened",
-          # pointing the user at a corrupt download rather than at an
-          # unsigned app. An explicit ad-hoc identity produces a valid
-          # signature with the hardened runtime, so the app is refused
-          # for the reason it actually is: not notarised.
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+      # Signed and notarised. The six secrets go together — a partial set
+      # makes Tauri attempt a notarisation it cannot finish.
+      - uses: tauri-apps/tauri-action@v0
+        if: steps.signing.outputs.mode == 'certificate'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
