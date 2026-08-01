@@ -60,6 +60,27 @@ require Krypton Runtime to be installed.
   `previous` for reading why a crashed container died
 
 <p align="center">
+  <img src="docs/screenshots/services.png" width="820" alt="Service list with the columns kubectl get prints" />
+</p>
+
+<p align="center">
+  <em>Listings use the API server's own printer, so the columns match
+  <code>kubectl get</code> — for built-in kinds and custom resources alike.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/node-detail.png" width="820" alt="Node detail with allocated CPU and memory against allocatable" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/secret-data.png" width="820" alt="Secret keys and sizes with values held back behind a per-key reveal" />
+</p>
+
+<p align="center">
+  <em>A Secret is described without being disclosed.</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/pod-yaml.png" width="820" alt="Pod manifest with syntax highlighting" />
 </p>
 
