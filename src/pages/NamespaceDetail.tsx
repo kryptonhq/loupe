@@ -5,7 +5,12 @@ import { Chip, ChipList } from "../components/Chip";
 import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
 import { EventsTable } from "../components/EventsTable";
-import { Field, PairChips, Section } from "../components/Field";
+import {
+  Annotations,
+  Field,
+  PairChips,
+  Section,
+} from "../components/Field";
 import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
 import { api, type PodSummary, type QuotaEntry } from "../lib/api";
@@ -184,7 +189,7 @@ export function NamespaceDetail({
               ))}
 
             <PairChips title="Labels" pairs={ns.labels} />
-            <PairChips title="Annotations" pairs={ns.annotations} />
+            <Annotations pairs={ns.annotations} />
           </div>
         ) : (
           <OverviewSkeleton />

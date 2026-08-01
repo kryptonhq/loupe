@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Chip } from "./Chip";
 
 // The label/value primitives every overview tab is built from.
@@ -37,9 +37,13 @@ export function Section({
   );
 }
 
-/// Labels, annotations, node addresses — anything that is a bag of
-/// key/value pairs. Rendered as chips so a set of eight reads as eight
-/// things rather than one long line.
+/// Labels and node roles — short key/value pairs. Rendered as chips so
+/// a set of eight reads as eight things rather than one long line.
+///
+/// Only safe for values that are actually short. Kubernetes caps a label
+/// value at 63 characters, which is what makes a non-wrapping chip the
+/// right shape here. Annotations have no such cap; they get `Annotations`
+/// below.
 export function PairChips({
   pairs,
   title,
@@ -57,6 +61,62 @@ export function PairChips({
           </Chip>
         ))}
       </div>
+    </Section>
+  );
+}
+
+/// Anything past this is folded away until asked for. Roughly three
+/// lines at the width these panes run to — enough to see what an
+/// annotation is, short of letting one own the page.
+const LONG_VALUE = 240;
+
+/// One annotation: the key, then its value beneath.
+///
+/// Two columns would be the obvious layout and it is the wrong one. An
+/// annotation value can be a whole serialised object —
+/// `last-applied-configuration` routinely runs to kilobytes — and a
+/// value column narrow enough to leave room for keys is a column that
+/// wraps every long value into a thin ribbon.
+function Annotation({ name, value }: { name: string; value: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = value.length > LONG_VALUE;
+
+  return (
+    <li className="min-w-0 rounded border px-2 py-1.5">
+      <p className="break-all font-mono text-2xs text-content-muted">{name}</p>
+      <p
+        // `break-all`, not `break-words`: serialised JSON has no spaces
+        // to break at, so a word-boundary rule would find none and let
+        // the line run off the side of the window — taking the page's
+        // horizontal scrollbar with it.
+        className={`mt-0.5 whitespace-pre-wrap break-all font-mono text-2xs ${
+          long && !expanded ? "line-clamp-3" : ""
+        }`}
+      >
+        {value}
+      </p>
+      {long && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="mt-1 rounded-sm text-2xs text-accent transition-colors hover:underline"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </li>
+  );
+}
+
+/// Annotations, which are unbounded in length and frequently enormous.
+export function Annotations({ pairs }: { pairs: [string, string][] }) {
+  if (pairs.length === 0) return null;
+  return (
+    <Section title="Annotations">
+      <ul className="space-y-1.5">
+        {pairs.map(([k, v]) => (
+          <Annotation key={k} name={k} value={v} />
+        ))}
+      </ul>
     </Section>
   );
 }

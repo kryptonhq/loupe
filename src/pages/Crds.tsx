@@ -238,7 +238,16 @@ export function Crds({
   onSelectKind: (resource: ApiResourceInfo | null) => void;
 }) {
   return resource ? (
-    <Objects resource={resource} onBack={() => onSelectKind(null)} />
+    // Keyed by kind so switching kinds remounts rather than reconciles.
+    // Without it the open object survives the switch — and an Agent
+    // named mcp-hello becomes a request for a Model named mcp-hello,
+    // which 404s. Nothing selected under one kind means anything under
+    // another.
+    <Objects
+      key={kindKey(resource)}
+      resource={resource}
+      onBack={() => onSelectKind(null)}
+    />
   ) : (
     <Kinds onSelect={onSelectKind} />
   );

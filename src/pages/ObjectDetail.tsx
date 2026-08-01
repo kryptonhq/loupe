@@ -5,7 +5,12 @@ import { Chip } from "../components/Chip";
 import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
 import { EventsTable } from "../components/EventsTable";
-import { Field, PairChips, Section } from "../components/Field";
+import {
+  Annotations,
+  Field,
+  PairChips,
+  Section,
+} from "../components/Field";
 import { api, type GvkRef } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
 
@@ -143,7 +148,7 @@ export function ObjectDetail({
             )}
 
             <PairChips title="Labels" pairs={object.labels} />
-            <PairChips title="Annotations" pairs={object.annotations} />
+            <Annotations pairs={object.annotations} />
 
             {!object.editable && (
               <p className="mt-4 text-2xs text-content-muted">

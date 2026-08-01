@@ -374,7 +374,15 @@ const FIXTURES: Record<string, unknown> = {
     age: "65d",
     status: "Ready",
     labels: [["app.kubernetes.io/managed-by", "krypton"]],
-    annotations: [],
+    annotations: [
+      // The reason annotations get their own renderer: `kubectl apply`
+      // writes the whole object back into this one.
+      [
+        "kubectl.kubernetes.io/last-applied-configuration",
+        '{"apiVersion":"krypton.ai/v1alpha1","kind":"Agent","metadata":{"annotations":{},"name":"mcp-hello","namespace":"agents"},"spec":{"mode":"always-on","replicas":1,"model":"qwen2-0-5b","resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"100m","memory":"256Mi"}},"tools":["search","fetch"]}}\n',
+      ],
+      ["krypton.ai/revision", "7"],
+    ],
     conditions: [
       { type: "Ready", status: "True", reason: "RolloutComplete", message: "1/1 replicas available" },
       { type: "ModelResolved", status: "True", reason: null, message: null },
