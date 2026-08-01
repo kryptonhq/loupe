@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Logo } from "./Logo";
 import { dragRegionProps } from "../lib/window";
 import { KIND_SECTIONS, type KindEntry } from "../lib/kinds";
+import { ThemePicker } from "./ThemePicker";
+import type { Theme } from "../lib/theme";
 import { api, type ApiResourceInfo, type ClusterInfo } from "../lib/api";
 
 /// Which pane the main area is showing.
@@ -38,6 +40,8 @@ interface SidebarProps {
   cluster: ClusterInfo | null;
   view: View;
   onSelect: (v: View) => void;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   onSwitchCluster: () => void;
   onDisconnect: () => void;
 }
@@ -245,6 +249,8 @@ export function Sidebar({
   cluster,
   view,
   onSelect,
+  theme,
+  onThemeChange,
   onSwitchCluster,
   onDisconnect,
 }: SidebarProps) {
@@ -308,6 +314,10 @@ export function Sidebar({
           onSelect={() => onSelect({ type: "helm" })}
         />
       </nav>
+
+      <div className="border-t p-2">
+        <ThemePicker theme={theme} onChange={onThemeChange} />
+      </div>
 
       {cluster && (
         <div className="border-t p-2">

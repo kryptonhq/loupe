@@ -8,6 +8,7 @@ import { Crds } from "./pages/Crds";
 import { KindBrowser } from "./pages/KindBrowser";
 import { Helm } from "./pages/Helm";
 import { api, type ClusterInfo } from "./lib/api";
+import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
 
 export default function App() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
@@ -19,7 +20,38 @@ export default function App() {
   // connected". Without it the picker flashes on every launch.
   const [ready, setReady] = useState(false);
 
+  // App owns the appearance: the picker sets it, the OS feeds into it
+  // when the preference is "system", and one effect applies the result.
+  const [theme, setTheme] = useState<Theme>("system");
+
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((s) => setTheme(parseTheme(s.theme)))
+      // No settings file yet, or no bridge in browser dev. Following the
+      // system is the right fallback either way.
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const system = window.matchMedia("(prefers-color-scheme: dark)");
+    const paint = () => applyTheme(isDark(theme, system.matches));
+    paint();
+    // Kept subscribed even when the preference is explicit: the user can
+    // switch back to "system" without a reload, and re-subscribing on
+    // every change would be the same work.
+    system.addEventListener("change", paint);
+    return () => system.removeEventListener("change", paint);
+  }, [theme]);
+
+  async function chooseTheme(next: Theme) {
+    // Applied first: the click should feel instant, and a preference
+    // that fails to persist is still the one the user asked for.
+    setTheme(next);
+    await api.setTheme(next).catch(() => {});
+  }
 
   useEffect(() => {
     // The session lives in Rust, so a webview reload reconnects to the
@@ -71,6 +103,8 @@ export default function App() {
         cluster={cluster}
         view={view}
         onSelect={setView}
+        theme={theme}
+        onThemeChange={chooseTheme}
         onSwitchCluster={() => setSwitching(true)}
         onDisconnect={disconnect}
       />

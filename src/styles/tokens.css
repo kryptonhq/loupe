@@ -49,6 +49,12 @@
   --ambient-2: 14 165 233;
   --ambient-alpha: 0.05;
 
+  /* How much of the window's own background survives when the OS is
+     blurring the desktop behind us. Not zero: a translucent window still
+     has to be a readable one, and the desktop behind it is a colour we
+     do not control. */
+  --scrim-alpha: 0.9;
+
   /* Code surfaces — the YAML pane and the log viewer.
    *
    * These get their own ramp rather than reusing the surface tokens. A
@@ -100,6 +106,8 @@
 
   --ambient-alpha: 0.1;
 
+  --scrim-alpha: 0.94;
+
   --code-bg: 6 8 12;
   --code-fg: 203 213 225;
   --code-gutter: 71 85 105;
@@ -124,6 +132,15 @@
   --surface-1: var(--glass-bg);
 }
 
+/* Translucent, not transparent. A fully transparent body leaves the
+ * content sitting directly on the blurred desktop, and dark mode's text
+ * is light grey — over anything bright it disappears. The scrim keeps
+ * the window's own surface underneath everything, so contrast holds
+ * whatever the user's wallpaper is doing, and the vibrancy reads as
+ * depth rather than as a missing background.
+ *
+ * The glass chrome composites on top of this, so fixing it here fixes
+ * the sidebar and headers too. */
 .vibrancy body {
-  background: transparent;
+  background-color: rgb(var(--base) / var(--scrim-alpha));
 }

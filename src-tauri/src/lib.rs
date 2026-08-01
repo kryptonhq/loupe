@@ -8,6 +8,7 @@
 
 mod cluster;
 mod error;
+mod settings;
 mod vibrancy;
 
 use cluster::{ClusterInfo, ContextInfo, SharedSession};
@@ -236,6 +237,20 @@ fn log_streams() -> &'static cluster::logs::LogStreams {
     STREAMS.get_or_init(cluster::logs::LogStreams::default)
 }
 
+#[tauri::command]
+fn get_settings(app: tauri::AppHandle) -> settings::Settings {
+    settings::load(&app)
+}
+
+/// Records the chosen appearance and returns the settings as stored.
+#[tauri::command]
+fn set_theme(app: tauri::AppHandle, theme: settings::Theme) -> Result<settings::Settings> {
+    let mut current = settings::load(&app);
+    current.theme = theme;
+    settings::save(&app, &current)?;
+    Ok(current)
+}
+
 /// Whether native window vibrancy is actually active.
 ///
 /// The frontend asks at startup rather than guessing from the platform:
@@ -283,6 +298,8 @@ pub fn run() {
             get_helm_release,
             start_pod_logs,
             stop_pod_logs,
+            get_settings,
+            set_theme,
             vibrancy_enabled,
         ])
         .run(tauri::generate_context!())

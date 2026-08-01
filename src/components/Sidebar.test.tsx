@@ -58,6 +58,8 @@ function setup({
         cluster={cluster}
         view={view}
         onSelect={onSelect}
+        theme="system"
+        onThemeChange={vi.fn()}
         onSwitchCluster={vi.fn()}
         onDisconnect={vi.fn()}
       />

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { api } from "./lib/api";
+import { applyTheme } from "./lib/theme";
 import "./index.css";
 
 // Opening the Vite dev server in a plain browser has no Tauri bridge,
@@ -14,14 +15,11 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   installDemoBridge();
 }
 
-// Follow the OS appearance. Tailwind runs with darkMode:"class", so the
-// class on <html> is what actually switches the palette.
-const dark = window.matchMedia("(prefers-color-scheme: dark)");
-const applyTheme = (isDark: boolean) =>
-  document.documentElement.classList.toggle("dark", isDark);
-
-applyTheme(dark.matches);
-dark.addEventListener("change", (e) => applyTheme(e.matches));
+// Paint in the OS appearance immediately, before the first render, so
+// the window never flashes the wrong palette. The stored preference is
+// read asynchronously and applied by App — which owns it from then on,
+// because two places toggling the class would drift apart.
+applyTheme(window.matchMedia("(prefers-color-scheme: dark)").matches);
 
 const queryClient = new QueryClient({
   defaultOptions: {

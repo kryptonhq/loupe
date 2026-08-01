@@ -4,6 +4,7 @@
 // serialises camelCase so the two stay aligned without a translation
 // layer. When a command signature changes there, it changes here.
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { Theme } from "./theme";
 
 export interface ContextInfo {
   name: string;
@@ -265,6 +266,13 @@ export interface ObjectDetail extends Editable {
   yaml: string;
 }
 
+/// Persisted user preferences. Stored as JSON in the app's config
+/// directory by the Rust side, not in the webview — a preference should
+/// survive a cache clear and be a file the user can read or delete.
+export interface Settings {
+  theme: Theme;
+}
+
 /// Identifies the object an editor is open on. Sent back with the edit
 /// so the backend can refuse one that has been retargeted.
 export interface EditTarget {
@@ -421,6 +429,9 @@ export const api = {
   startPodLogs: (options: LogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_pod_logs", { options, channel }),
   stopPodLogs: (id: number) => invoke<boolean>("stop_pod_logs", { id }),
+
+  getSettings: () => invoke<Settings>("get_settings"),
+  setTheme: (theme: Theme) => invoke<Settings>("set_theme", { theme }),
 
   /// Whether native window vibrancy actually took effect. Asked rather
   /// than inferred from the platform: support depends on OS build and,
