@@ -87,10 +87,58 @@ attempt a notarisation it cannot complete.
 | `APPLE_PASSWORD` | An app-specific password, not the account password |
 | `APPLE_TEAM_ID` | The 10-character team identifier |
 
-```bash
-# Export the certificate from Keychain Access first.
-base64 -i DeveloperID.p12 | pbcopy
-```
+#### Getting them
+
+The fiddly part is the export: the obvious path in Keychain Access
+produces a certificate **without its private key**, which signs nothing
+and fails with an error that does not say so.
+
+1. **Make a signing request.** Keychain Access → Certificate Assistant →
+   *Request a Certificate From a Certificate Authority*. Enter your
+   email, choose **Saved to disk**, and keep the `.certSigningRequest`.
+
+2. **Create the certificate.** [developer.apple.com](https://developer.apple.com/account/resources/certificates/list)
+   → Certificates → **+** → **Developer ID Application** (not "Apple
+   Distribution", which is the App Store one). Upload the request,
+   download the `.cer`, and double-click it to install.
+
+3. **Export it *with* the key.** In Keychain Access, open **My
+   Certificates** — not the Certificates category — and find
+   `Developer ID Application: <name> (TEAMID)`. It must have a
+   disclosure triangle with a private key under it. Right-click →
+   *Export* → `.p12`, and set a password.
+
+   If it is not under My Certificates, the private key is on whichever
+   Mac generated the request in step 1.
+
+4. **Encode it.**
+
+   ```bash
+   base64 -i DeveloperID.p12 | pbcopy      # -> APPLE_CERTIFICATE
+   ```
+
+   The password you just set is `APPLE_CERTIFICATE_PASSWORD`.
+
+5. **Read the identity string exactly.** Copying it by eye from the
+   portal is how people end up with a trailing space:
+
+   ```bash
+   security find-identity -v -p codesigning   # -> APPLE_SIGNING_IDENTITY
+   ```
+
+6. **Team ID** is on the [membership page](https://developer.apple.com/account)
+   — ten characters, and also the parenthesised part of the identity
+   string above.
+
+7. **App-specific password** for notarisation, from
+   [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security
+   → App-Specific Passwords. Not your Apple ID password, which will not
+   work.
+
+An App Store Connect API key is the more durable alternative to steps 6
+and 7 — it survives password rotations and 2FA changes, which an
+app-specific password does not. Worth switching to if the notarisation
+step starts failing after an account change.
 
 When they are all present Tauri signs with the real identity and
 notarises; otherwise it ad-hoc signs.
@@ -187,6 +235,39 @@ before the tap exists.
 
 Checksums are taken from the uploaded artifacts rather than from a local
 build, so what the cask claims is what people actually download.
+
+## The first signed release
+
+The signed path has never run, and the first release showed what an
+untested path costs. When the certificate is in place, prove it on a tag
+nobody is watching:
+
+```bash
+git tag v0.0.2-test && git push origin v0.0.2-test
+```
+
+Check the resulting draft, then throw both away:
+
+```bash
+gh release delete v0.0.2-test --repo kryptonhq/loupe --yes
+git push --delete origin v0.0.2-test
+```
+
+What to look for on the built app:
+
+```bash
+# Authority should name the Developer ID, not "adhoc".
+codesign -dv --verbose=2 /Applications/Loupe.app
+# The verdict that matters — "accepted" means Gatekeeper is satisfied.
+spctl -a -vvv /Applications/Loupe.app
+# And the notarisation ticket is stapled, so it works offline.
+xcrun stapler validate /Applications/Loupe.app
+```
+
+Once `spctl` says accepted, the `caveats` block in
+[the cask template](packaging/homebrew/loupe.rb.template) is obsolete
+and should be removed — it tells users to work around a problem they no
+longer have.
 
 ## Not done yet
 
