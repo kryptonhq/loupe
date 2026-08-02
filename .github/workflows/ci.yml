@@ -51,7 +51,22 @@ jobs:
               # (co-authored work), so warn rather than fail.
               echo "::warning::$(git show -s --format='%h' "$sha") sign-off does not match the author ($author)"
             fi
-          done < <(git rev-list "$BASE..$HEAD")
+          # `--no-merges` deliberately.
+          #
+          # A merge commit contributes no code: the contribution lives in
+          # the commits it joins, and every one of those is checked here.
+          # GitHub's "Update branch" button and its merge queue both
+          # create merge commits attributed to whoever pressed the
+          # button, with no sign-off — so requiring one turns a
+          # one-click branch refresh into a permanently red DCO that can
+          # only be cleared by rebasing and force-pushing. That happened
+          # twice in one afternoon, including on a Dependabot PR whose
+          # own commit was correctly signed off.
+          #
+          # This matches the DCO GitHub App, and the DCO itself: it is a
+          # statement about authoring a contribution, not about
+          # integrating one.
+          done < <(git rev-list --no-merges "$BASE..$HEAD")
 
           if [ "$missing" -ne 0 ]; then
             echo
