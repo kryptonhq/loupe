@@ -42,7 +42,7 @@ serde_yaml = "0.9.34"
 # Helm keeps a release in a Secret as base64(gzip(json)). Reading it
 # directly is what lets Loupe show releases without shelling out to the
 # helm binary, which a desktop user may not have installed.
-base64 = "0.22.1"
+base64 = "0.23.0"
 flate2 = "1.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 window-vibrancy = "0.8.0"
