@@ -39,16 +39,25 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # The tag reaches the shell through the environment, never through
+      # `${{ }}`. Interpolation happens before the shell sees the script,
+      # so a tag containing a quote and a semicolon would not be a
+      # mis-parsed string — it would be a second command, running in the
+      # job that holds the release and tap tokens. `workflow_dispatch`
+      # narrows who can supply one to people with write access, which is
+      # a smaller set than the internet and a larger one than the people
+      # trusted with those secrets.
       - id: resolve
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-          python3 scripts/version.py --check "$tag"
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${RAW_TAG#v}" >> "$GITHUB_OUTPUT"
+          python3 scripts/version.py --check "$RAW_TAG"
 
   # One draft up front, so the matrix uploads into it rather than racing
   # to create it.
@@ -59,15 +68,20 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.tag }}
 
       - id: create
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          # Same reasoning as the resolve step: this value originates in
+          # `inputs.tag`, and interpolating it into the script body would
+          # let it close the string and run as JavaScript.
+          TAG: ${{ needs.version.outputs.tag }}
         with:
           script: |
-            const tag = "${{ needs.version.outputs.tag }}";
+            const tag = process.env.TAG;
             const { owner, repo } = context.repo;
 
             // Reuse the draft if this is a retry, rather than stacking
@@ -120,25 +134,26 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.tag }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: stable
           # Empty for the native builds; the macOS jobs cross-compile,
           # and the Intel one is a cross-compile on an Arm runner.
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
@@ -161,9 +176,16 @@ jobs:
       # So the certificate variables are only allowed to exist when
       # there is a certificate, which needs two build steps rather than
       # one conditional expression.
+      #
+      # Read through the environment rather than interpolated into the
+      # script: `${{ }}` pastes the certificate itself into the shell
+      # source, where a stray quote would break the script and the value
+      # is one `set -x` away from the log.
       - id: signing
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
-          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ]; then
+          if [ -n "$CERTIFICATE" ]; then
             echo "mode=certificate" >> "$GITHUB_OUTPUT"
           else
             echo "mode=adhoc" >> "$GITHUB_OUTPUT"
@@ -181,7 +203,7 @@ jobs:
       # is refused for the reason it actually is: not notarised.
       #
       # Ignored on Linux and Windows, which have no such concept.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         if: steps.signing.outputs.mode == 'adhoc'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -192,7 +214,7 @@ jobs:
 
       # Signed and notarised. The six secrets go together — a partial set
       # makes Tauri attempt a notarisation it cannot finish.
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         if: steps.signing.outputs.mode == 'certificate'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -211,11 +233,13 @@ jobs:
     needs: [version, draft, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
         with:
           script: |
             const { owner, repo } = context.repo;
-            const release_id = Number("${{ needs.draft.outputs.release_id }}");
+            const release_id = Number(process.env.RELEASE_ID);
 
             const assets = await github.rest.repos.listReleaseAssets({ owner, repo, release_id });
             const names = assets.data.map((a) => a.name);
@@ -255,7 +279,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       TAG: ${{ needs.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.version.outputs.tag }}
 

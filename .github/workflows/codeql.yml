@@ -1,0 +1,59 @@
+name: codeql
+
+# GitHub's own analysis, free on public repositories.
+#
+# It overlaps with Semgrep and is kept anyway: Semgrep matches patterns,
+# CodeQL follows data. The question that matters most for Loupe — can a
+# string that came from a cluster reach somewhere it gets executed — is a
+# dataflow question, and pattern matching answers it only by accident.
+#
+# Results land in the repository's Security tab and are annotated on the
+# pull request, rather than being buried in a job log.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Offset from `security.yml` so a bad morning is not simultaneously
+    # every check going red.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Writing the results back to the Security tab.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: rust
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize
+        uses: github/codeql-action/init@a2983b8bed1923f44751c5c43237f479442827b3 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # `security-extended` over the default: this is a desktop app
+          # holding cluster credentials, and the extra queries are worth
+          # more here than the noise they cost.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@a2983b8bed1923f44751c5c43237f479442827b3 # v3
+        with:
+          category: /language:${{ matrix.language }}
