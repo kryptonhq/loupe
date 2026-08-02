@@ -1,6 +1,6 @@
 [package]
 name = "loupe"
-version = "0.1.0"
+version = "0.1.1"
 description = "An open-source desktop client for Kubernetes"
 authors = ["The Loupe Authors"]
 license = "Apache-2.0"
