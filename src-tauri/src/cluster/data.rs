@@ -65,15 +65,11 @@ fn describe(key: String, raw: &[u8], reveal: bool) -> DataKey {
     }
 }
 
-pub async fn get_config_map_data(
-    session: &Session,
-    namespace: &str,
-    name: &str,
-) -> Result<ResourceData> {
-    let client = session.client().await?;
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
-    let cm = api.get(name).await?;
-
+/// Describes a ConfigMap's contents.
+///
+/// Split from the fetch so the shape of what leaves the Rust side can be
+/// asserted without a cluster.
+fn config_map_data(cm: ConfigMap) -> ResourceData {
     let mut keys: Vec<DataKey> = cm
         .data
         .unwrap_or_default()
@@ -97,27 +93,32 @@ pub async fn get_config_map_data(
     );
 
     keys.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(ResourceData {
+    ResourceData {
         keys,
         type_: None,
         redacted: false,
-    })
+    }
+}
+
+pub async fn get_config_map_data(
+    session: &Session,
+    namespace: &str,
+    name: &str,
+) -> Result<ResourceData> {
+    let client = session.client().await?;
+    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
+    Ok(config_map_data(api.get(name).await?))
 }
 
 /// A Secret's keys, with values withheld unless `reveal` names them.
 ///
 /// `reveal` is a list rather than a flag so the UI can show one value
 /// without putting every credential in the object on screen at once.
-pub async fn get_secret_data(
-    session: &Session,
-    namespace: &str,
-    name: &str,
-    reveal: Vec<String>,
-) -> Result<ResourceData> {
-    let client = session.client().await?;
-    let api: Api<Secret> = Api::namespaced(client, namespace);
-    let secret = api.get(name).await?;
-
+///
+/// Split from the fetch because this is the function that decides what
+/// leaves the process, and that decision deserves to be tested directly
+/// rather than only against whatever happens to be on a live cluster.
+fn secret_data(secret: Secret, reveal: &[String]) -> ResourceData {
     let mut keys: Vec<DataKey> = secret
         .data
         .unwrap_or_default()
@@ -129,14 +130,25 @@ pub async fn get_secret_data(
         .collect();
 
     keys.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(ResourceData {
+    ResourceData {
         keys,
         type_: secret.type_,
         // The tab always says values are held back, even when one has
         // been revealed — the state the user should assume is the
         // guarded one.
         redacted: true,
-    })
+    }
+}
+
+pub async fn get_secret_data(
+    session: &Session,
+    namespace: &str,
+    name: &str,
+    reveal: Vec<String>,
+) -> Result<ResourceData> {
+    let client = session.client().await?;
+    let api: Api<Secret> = Api::namespaced(client, namespace);
+    Ok(secret_data(api.get(name).await?, &reveal))
 }
 
 /// Replaces every value in an object's `data`/`stringData` maps.
@@ -236,6 +248,193 @@ mod tests {
         // Everything that is not a value is left alone.
         assert_eq!(object["type"], "Opaque");
         assert_eq!(object["metadata"]["name"], "db");
+    }
+
+    /// A Secret carrying the two keys a `kubernetes.io/basic-auth`
+    /// secret has, plus a binary one.
+    fn secret(entries: &[(&str, &[u8])], type_: Option<&str>) -> Secret {
+        Secret {
+            data: Some(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), k8s_openapi::ByteString(v.to_vec())))
+                    .collect(),
+            ),
+            type_: type_.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_secret_discloses_nothing_when_nothing_is_asked_for() {
+        // The default state of the Data tab. Opening a Secret must not
+        // put credentials on screen — a screen-share or a shoulder is
+        // enough to leak them, and the user only wanted the shape.
+        let data = secret_data(
+            secret(
+                &[("username", b"postgres"), ("password", b"hunter2")],
+                Some("Opaque"),
+            ),
+            &[],
+        );
+
+        assert!(data.redacted);
+        assert_eq!(key_names(&data), vec!["password", "username"]);
+        assert!(
+            data.keys.iter().all(|k| k.value.is_none()),
+            "no value may be returned without being named"
+        );
+        // Sizes still describe each key, which is what makes the
+        // withheld view useful rather than merely empty.
+        assert!(data.keys.iter().all(|k| k.bytes > 0));
+        assert_eq!(data.type_.as_deref(), Some("Opaque"));
+    }
+
+    #[test]
+    fn revealing_one_key_discloses_only_that_key() {
+        // The reason `reveal` is a list of names rather than a boolean:
+        // checking one credential must not put every other credential in
+        // the object on screen alongside it.
+        let data = secret_data(
+            secret(
+                &[
+                    ("username", b"postgres"),
+                    ("password", b"hunter2"),
+                    ("token", b"ey.J9"),
+                ],
+                Some("Opaque"),
+            ),
+            &["username".to_string()],
+        );
+
+        let by_key = |name: &str| data.keys.iter().find(|k| k.key == name).unwrap();
+        assert_eq!(by_key("username").value.as_deref(), Some("postgres"));
+        assert_eq!(by_key("password").value, None);
+        assert_eq!(by_key("token").value, None);
+        // Still flagged as redacted: the state to assume is the guarded
+        // one, even with one value on screen.
+        assert!(data.redacted);
+    }
+
+    #[test]
+    fn naming_a_key_that_does_not_exist_reveals_nothing_else() {
+        // A stale request from the UI — the key was renamed, or the
+        // Secret changed under it. It must not fall back to "reveal all".
+        let data = secret_data(
+            secret(&[("password", b"hunter2")], Some("Opaque")),
+            &["nonexistent".to_string()],
+        );
+        assert!(data.keys.iter().all(|k| k.value.is_none()));
+    }
+
+    #[test]
+    fn a_binary_secret_value_is_never_rendered_even_when_revealed() {
+        // A TLS key in DER form. Asking for it explicitly still gets
+        // nothing back, because there is nothing legible to show and a
+        // screen of replacement characters reads as corruption.
+        let data = secret_data(
+            secret(
+                &[("tls.key", &[0xff, 0xfe, 0x00, 0x01])],
+                Some("kubernetes.io/tls"),
+            ),
+            &["tls.key".to_string()],
+        );
+        let key = &data.keys[0];
+        assert!(key.binary);
+        assert_eq!(key.value, None);
+        assert_eq!(key.bytes, 4);
+    }
+
+    #[test]
+    fn an_empty_secret_is_described_rather_than_refused() {
+        let data = secret_data(Secret::default(), &[]);
+        assert!(data.keys.is_empty());
+        assert!(data.redacted, "an empty Secret is still a Secret");
+        assert_eq!(data.type_, None);
+    }
+
+    #[test]
+    fn a_configmap_shows_every_value_outright() {
+        // The counterpart to the Secret rule. A ConfigMap holds nothing
+        // to hide, and making people click Reveal per key would be
+        // friction with no security behind it.
+        let cm = ConfigMap {
+            data: Some(
+                [
+                    ("log_level".to_string(), "debug".to_string()),
+                    ("timeout".to_string(), "30s".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let data = config_map_data(cm);
+        assert!(!data.redacted);
+        assert_eq!(data.type_, None, "only Secrets carry a type");
+        assert!(data.keys.iter().all(|k| k.value.is_some()));
+        assert_eq!(key_names(&data), vec!["log_level", "timeout"]);
+    }
+
+    #[test]
+    fn configmap_binary_data_is_listed_alongside_the_text_keys() {
+        // binaryData is a separate map in the API. A key that only
+        // appears in it would otherwise be invisible in the tab, and
+        // "the key is missing" is a worse answer than "it is binary".
+        let cm = ConfigMap {
+            data: Some(
+                [("app.conf".to_string(), "listen=80".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            binary_data: Some(
+                [(
+                    "truststore.jks".to_string(),
+                    k8s_openapi::ByteString(vec![0xca, 0xfe, 0xba, 0xbe]),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let data = config_map_data(cm);
+        // Sorted together, so the tab reads as one list of keys.
+        assert_eq!(key_names(&data), vec!["app.conf", "truststore.jks"]);
+        let jks = data
+            .keys
+            .iter()
+            .find(|k| k.key == "truststore.jks")
+            .unwrap();
+        assert!(jks.binary);
+        assert_eq!(jks.value, None);
+        assert_eq!(jks.bytes, 4);
+    }
+
+    #[test]
+    fn redaction_does_not_depend_on_the_value_being_valid_base64() {
+        // `redact` runs over the raw JSON, before anything decodes it. A
+        // hand-edited or malformed Secret must still be redacted — the
+        // failure mode to avoid is "unparseable, so printed as-is".
+        let mut object = serde_json::json!({
+            "kind": "Secret",
+            "data": {"password": "!!!not base64!!!"}
+        });
+        redact(&mut object);
+        assert_eq!(object["data"]["password"], REDACTED);
+    }
+
+    #[test]
+    fn the_placeholder_does_not_vary_with_the_value_it_replaces() {
+        // A placeholder proportional to the real value would leak its
+        // length, which for a password is worth something to an attacker.
+        let mut short = serde_json::json!({"data": {"k": "YQ=="}});
+        let mut long =
+            serde_json::json!({"data": {"k": "aHVudGVyMmh1bnRlcjJodW50ZXIyaHVudGVyMg=="}});
+        redact(&mut short);
+        redact(&mut long);
+        assert_eq!(short["data"]["k"], long["data"]["k"]);
     }
 
     #[test]

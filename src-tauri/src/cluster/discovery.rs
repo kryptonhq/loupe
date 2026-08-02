@@ -131,22 +131,33 @@ fn describe(gvk: &GvkRef) -> String {
     }
 }
 
-/// Builds an `Api` for a dynamic kind, respecting its scope.
+/// Which namespace a request should actually be scoped to.
 ///
-/// Asking for a namespace on a cluster-scoped kind would produce a URL
-/// the API server 404s on, so the resource's own scope wins over the
-/// caller's request.
+/// The resource's own scope wins over the caller's request: asking for a
+/// namespace on a cluster-scoped kind builds a URL the API server 404s
+/// on. An empty string is treated as "all namespaces" because that is
+/// what the frontend's namespace picker sends for its "All" option.
+///
+/// Shared with the server-side printing path so a listing and its table
+/// can never disagree about which URL they are talking to.
+pub(crate) fn scoped_namespace(namespaced: bool, requested: Option<&str>) -> Option<&str> {
+    match (namespaced, requested) {
+        (true, Some(ns)) if !ns.is_empty() => Some(ns),
+        _ => None,
+    }
+}
+
+/// Builds an `Api` for a dynamic kind, respecting its scope.
 pub(crate) fn api_for(
     client: kube::Client,
     resource: &ApiResource,
     caps: &ApiCapabilities,
     namespace: Option<&str>,
 ) -> Api<DynamicObject> {
-    match (caps.scope.clone(), namespace) {
-        (Scope::Namespaced, Some(ns)) if !ns.is_empty() => {
-            Api::namespaced_with(client, ns, resource)
-        }
-        _ => Api::all_with(client, resource),
+    let namespaced = matches!(caps.scope, Scope::Namespaced);
+    match scoped_namespace(namespaced, namespace) {
+        Some(ns) => Api::namespaced_with(client, ns, resource),
+        None => Api::all_with(client, resource),
     }
 }
 
@@ -259,15 +270,16 @@ pub async fn list_objects(
     let api = api_for(client, &resource, &caps, namespace.as_deref());
 
     let list = api.list(&ListParams::default()).await?;
-    Ok(list
-        .into_iter()
-        .map(|obj| ObjectSummary {
-            age: age(&obj),
-            status: summarise_status(&obj.data),
-            name: obj.name_any(),
-            namespace: obj.namespace(),
-        })
-        .collect())
+    Ok(list.into_iter().map(summarise_object).collect())
+}
+
+fn summarise_object(obj: DynamicObject) -> ObjectSummary {
+    ObjectSummary {
+        age: age(&obj),
+        status: summarise_status(&obj.data),
+        name: obj.name_any(),
+        namespace: obj.namespace(),
+    }
 }
 
 pub async fn get_object(
@@ -280,14 +292,36 @@ pub async fn get_object(
     let (resource, caps) = resolve(session, &gvk).await?;
     let api = api_for(client, &resource, &caps, namespace.as_deref());
 
-    let mut obj = api.get(name).await?;
+    object_detail_from(
+        api.get(name).await?,
+        &resource.api_version,
+        &resource.kind,
+        caps.supports_operation("update"),
+    )
+}
+
+/// Builds the detail payload for an object of unknown shape.
+///
+/// Split from `get_object` because two of the decisions here are
+/// security-relevant — whether a Secret's values are redacted, and
+/// whether the result may be edited — and both should be provable
+/// without needing a cluster that happens to hold a Secret.
+///
+/// `updatable` is what the API server says about the *kind*; whether
+/// this particular object ends up editable is decided below.
+pub(crate) fn object_detail_from(
+    mut obj: DynamicObject,
+    api_version: &str,
+    kind: &str,
+    updatable: bool,
+) -> Result<ObjectDetail> {
     obj.metadata.managed_fields = None;
 
     // A Secret's values are base64 in the API, which is an encoding and
     // not a protection: rendering the YAML as-is would put every
     // credential on screen. Redacted here rather than in a separate
     // Secret-only path, so there is no generic route that bypasses it.
-    let redacted = crate::cluster::data::is_secret(&resource.api_version, &resource.kind);
+    let redacted = crate::cluster::data::is_secret(api_version, kind);
     if redacted {
         crate::cluster::data::redact(&mut obj.data);
     }
@@ -295,15 +329,15 @@ pub async fn get_object(
     // no `types`, and YAML without apiVersion/kind is not re-appliable —
     // which matters because the editor round-trips exactly this text.
     obj.types = Some(kube::core::TypeMeta {
-        api_version: resource.api_version.clone(),
-        kind: resource.kind.clone(),
+        api_version: api_version.to_string(),
+        kind: kind.to_string(),
     });
 
     let yaml = to_yaml(&obj)?;
 
     Ok(ObjectDetail {
-        api_version: resource.api_version.clone(),
-        kind: resource.kind.clone(),
+        api_version: api_version.to_string(),
+        kind: kind.to_string(),
         age: age(&obj),
         status: summarise_status(&obj.data),
         labels: sorted_pairs(obj.labels()),
@@ -311,7 +345,7 @@ pub async fn get_object(
         conditions: conditions_from(&obj.data),
         // Never offer to apply text whose values have been replaced:
         // saving it would write the placeholder over the real secret.
-        editable: caps.supports_operation("update") && !redacted,
+        editable: updatable && !redacted,
         name: obj.name_any(),
         namespace: obj.namespace(),
         yaml,
@@ -422,6 +456,189 @@ mod tests {
     fn a_condition_without_a_type_is_dropped() {
         let obj = json!({"status": {"conditions": [{"status": "True"}]}});
         assert!(conditions_from(&obj).is_empty());
+    }
+
+    /// Builds an untyped object the way the API server hands one back.
+    fn object(name: &str, namespace: Option<&str>, data: serde_json::Value) -> DynamicObject {
+        DynamicObject {
+            types: None,
+            metadata: kube::core::ObjectMeta {
+                name: Some(name.into()),
+                namespace: namespace.map(str::to_string),
+                ..Default::default()
+            },
+            data,
+        }
+    }
+
+    #[test]
+    fn a_kind_the_cluster_does_not_serve_is_named_in_full() {
+        // The error is the whole diagnosis for "why can Loupe not see my
+        // CRD" — it has to say which group/version it looked for.
+        assert_eq!(
+            describe(&GvkRef {
+                group: "cert-manager.io".into(),
+                version: "v1".into(),
+                kind: "Certificate".into()
+            }),
+            "Certificate (cert-manager.io/v1)"
+        );
+        // A core kind has no group, and printing "Pod (/v1)" would look
+        // like a bug rather than like the core group.
+        assert_eq!(
+            describe(&GvkRef {
+                group: String::new(),
+                version: "v1".into(),
+                kind: "Pod".into()
+            }),
+            "Pod (v1)"
+        );
+    }
+
+    #[test]
+    fn a_cluster_scoped_kind_ignores_a_requested_namespace() {
+        // Nodes are cluster-scoped. Honouring a namespace here builds
+        // /api/v1/namespaces/default/nodes, which the API server 404s.
+        assert_eq!(scoped_namespace(false, Some("kube-system")), None);
+    }
+
+    #[test]
+    fn an_empty_namespace_means_all_namespaces() {
+        // What the namespace picker's "All" option sends. Treating it as
+        // a real namespace would request a namespace literally named "".
+        assert_eq!(scoped_namespace(true, Some("")), None);
+        assert_eq!(scoped_namespace(true, None), None);
+        assert_eq!(scoped_namespace(true, Some("prod")), Some("prod"));
+    }
+
+    #[test]
+    fn a_secret_is_redacted_and_made_read_only_on_the_generic_path() {
+        // The route an operator actually takes to a Secret is the same
+        // generic detail view every other kind uses. If the redaction
+        // lived only in a Secret-specific path, this route would print
+        // every credential — so it is asserted here, on the generic one.
+        let detail = object_detail_from(
+            object(
+                "db-credentials",
+                Some("prod"),
+                json!({"data": {"password": "aHVudGVyMg=="}, "type": "Opaque"}),
+            ),
+            "v1",
+            "Secret",
+            true,
+        )
+        .expect("build detail");
+
+        assert!(
+            !detail.yaml.contains("aHVudGVyMg=="),
+            "the YAML tab must not carry the value: {}",
+            detail.yaml
+        );
+        assert!(detail.yaml.contains("redacted"));
+        // Applying redacted text would write the placeholder over every
+        // real value — a worse outcome than not being able to edit here.
+        assert!(
+            !detail.editable,
+            "redacted YAML must never be offered for editing"
+        );
+    }
+
+    #[test]
+    fn a_configmap_on_the_same_path_is_not_redacted() {
+        // The counterpart. Redacting everything would be safe and
+        // useless; the rule has to be specific to Secrets.
+        let detail = object_detail_from(
+            object(
+                "app-config",
+                Some("prod"),
+                json!({"data": {"log_level": "debug"}}),
+            ),
+            "v1",
+            "ConfigMap",
+            true,
+        )
+        .expect("build detail");
+
+        assert!(detail.yaml.contains("debug"));
+        assert!(detail.editable);
+    }
+
+    #[test]
+    fn a_kind_the_server_will_not_update_is_not_editable() {
+        // Offering an Edit button that always fails is worse than not
+        // offering one. This is the RBAC-and-subresource case, distinct
+        // from the redaction case above.
+        let detail = object_detail_from(
+            object("metrics", None, json!({})),
+            "metrics.k8s.io/v1beta1",
+            "NodeMetrics",
+            false,
+        )
+        .expect("build detail");
+        assert!(!detail.editable);
+    }
+
+    #[test]
+    fn detail_yaml_always_carries_apiversion_and_kind() {
+        // A DynamicObject fetched through the typed path comes back with
+        // no `types`. The editor round-trips exactly this text, and YAML
+        // without an apiVersion is not re-appliable.
+        let detail = object_detail_from(
+            object("web", Some("prod"), json!({"spec": {"replicas": 3}})),
+            "apps/v1",
+            "Deployment",
+            true,
+        )
+        .expect("build detail");
+
+        assert!(detail.yaml.contains("apiVersion: apps/v1"));
+        assert!(detail.yaml.contains("kind: Deployment"));
+        assert_eq!(detail.api_version, "apps/v1");
+        assert_eq!(detail.kind, "Deployment");
+        assert_eq!(detail.namespace.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn detail_strips_managed_fields_from_an_untyped_object() {
+        let mut obj = object("web", Some("prod"), json!({}));
+        obj.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("kube-controller-manager".into()),
+                ..Default::default()
+            },
+        ]);
+
+        let detail = object_detail_from(obj, "apps/v1", "Deployment", true).expect("build detail");
+        assert!(!detail.yaml.contains("managedFields"));
+        assert!(!detail.yaml.contains("kube-controller-manager"));
+    }
+
+    #[test]
+    fn a_listing_and_its_detail_agree_about_status() {
+        // Both read the same object through different functions. If they
+        // diverge, a row says Ready and the page it opens says otherwise.
+        let data = json!({"status": {"conditions": [{"type": "Ready", "status": "True"}]}});
+        let summary = summarise_object(object("thing", Some("prod"), data.clone()));
+        let detail = object_detail_from(
+            object("thing", Some("prod"), data),
+            "x.io/v1",
+            "Thing",
+            true,
+        )
+        .expect("build detail");
+
+        assert_eq!(summary.status.as_deref(), Some("Ready"));
+        assert_eq!(summary.status, detail.status);
+        assert_eq!(summary.name, detail.name);
+        assert_eq!(summary.namespace, detail.namespace);
+    }
+
+    #[test]
+    fn a_cluster_scoped_object_summarises_with_no_namespace() {
+        let summary = summarise_object(object("node-1", None, json!({})));
+        assert_eq!(summary.namespace, None);
+        // No status block at all is a legitimate CRD shape.
+        assert_eq!(summary.status, None);
     }
 
     #[tokio::test]
