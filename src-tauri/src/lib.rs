@@ -265,8 +265,12 @@ struct VibrancyState(bool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // No plugins are registered. `tauri-plugin-opener` came with the
+    // scaffold and was never used: it lets the webview ask the OS to
+    // open an arbitrary URL or path, and Loupe renders strings that come
+    // from the cluster — annotations, chart homepages, CRD fields. A
+    // capability nothing needs is one that cannot be misused later.
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(SharedSession::default());
             app.manage(VibrancyState(vibrancy::setup(app)));

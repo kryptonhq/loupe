@@ -1,0 +1,87 @@
+version: 2
+
+# Loupe's dependency surface is large and mostly transitive: Tauri pulls
+# in a webview stack, kube pulls in a TLS stack. Neither is something a
+# human will notice going stale, and the advisories that matter arrive
+# long after the code stops changing — so the updates are scheduled
+# rather than left to whoever next opens the repository.
+#
+# Grouped deliberately. One PR per crate would be a wall of noise nobody
+# reviews, and a wall nobody reviews is worse than no automation: it
+# trains people to merge dependency bumps without reading them. Security
+# updates are kept ungrouped so they arrive on their own and get looked
+# at.
+
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # A release published an hour ago is the one most likely to have been
+    # published by someone who just took over the account. Waiting a few
+    # days costs nothing here and is the window in which a compromised
+    # package usually gets yanked. Security updates ignore the delay.
+    cooldown:
+      default-days: 7
+    groups:
+      # Tauri's crates move together and only work together; splitting
+      # them produces PRs that cannot build on their own.
+      tauri:
+        patterns:
+          - "tauri*"
+          - "wry"
+          - "window-vibrancy"
+      kubernetes:
+        patterns:
+          - "kube*"
+          - "k8s-openapi"
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+      # The test and build toolchain. Every advisory this repository has
+      # had so far came from here, and none of it ships in the app.
+      tooling:
+        patterns:
+          - "vite*"
+          - "@vitejs/*"
+          - "@vitest/*"
+          - "vitest"
+          - "typescript"
+          - "postcss"
+          - "autoprefixer"
+          - "tailwindcss"
+          - "@testing-library/*"
+          - "jsdom"
+
+  # Actions are executable code running with a token, and the workflows
+  # pin them to commit SHAs so a moved tag cannot swap one out from under
+  # us. A pin nobody updates is its own problem, which is what this is
+  # for: Dependabot reads the `# v4` trailing comment and bumps both.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"

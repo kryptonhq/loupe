@@ -167,8 +167,13 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
+            // Test scaffolding. `create_dir` below rather than
+            // `create_dir_all` so it fails closed: the system temp
+            // directory is shared, and a path something else got to
+            // first should stop the test rather than be written through.
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
             let dir = std::env::temp_dir().join(format!("loupe-settings-{tag}-{stamp}"));
-            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            std::fs::create_dir(&dir).expect("create scratch dir");
             TempDir(dir)
         }
 

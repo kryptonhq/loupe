@@ -300,6 +300,19 @@ pub async fn get_release(session: &Session, namespace: &str, name: &str) -> Resu
         }
     }
 
+    release_detail_from(revisions, namespace, name)
+}
+
+/// Assembles the detail payload from every revision of one release.
+///
+/// Split from `get_release` so the two decisions worth pinning — which
+/// revision leads, and which values are shown — can be tested without a
+/// cluster that happens to have a release installed on it.
+pub(crate) fn release_detail_from(
+    mut revisions: Vec<serde_json::Value>,
+    namespace: &str,
+    name: &str,
+) -> Result<ReleaseDetail> {
     // Newest first: the current revision leads, and the history below it
     // reads backwards in time the way `helm history` prints it.
     revisions.sort_by_key(|r| std::cmp::Reverse(revision_of(r)));
@@ -511,6 +524,114 @@ mod tests {
     fn a_real_timestamp_renders_an_age() {
         let recent = k8s_openapi::jiff::Timestamp::now().to_string();
         assert!(age_of(&recent).is_some());
+    }
+
+    /// The same release at an earlier revision.
+    fn revision_at(version: i64, status: &str) -> serde_json::Value {
+        let mut release = release_json();
+        release["version"] = json!(version);
+        release["info"]["status"] = json!(status);
+        release
+    }
+
+    #[test]
+    fn the_current_revision_leads_however_the_secrets_arrived() {
+        // The API returns Secrets in name order, which puts v10 before
+        // v2. Leading with the wrong one would show a superseded release
+        // as the live one — the worst thing this view could get wrong.
+        let detail = release_detail_from(
+            vec![
+                revision_at(2, "superseded"),
+                revision_at(10, "deployed"),
+                revision_at(1, "superseded"),
+            ],
+            "monitoring",
+            "prom",
+        )
+        .expect("build detail");
+
+        assert_eq!(detail.revision, 10);
+        assert_eq!(detail.status, "deployed");
+        assert_eq!(detail.history[0].revision, 10);
+        assert!(
+            detail
+                .history
+                .windows(2)
+                .all(|w| w[0].revision >= w[1].revision),
+            "history reads backwards in time"
+        );
+    }
+
+    #[test]
+    fn values_show_what_was_overridden_not_the_charts_defaults() {
+        // `config` is the user's overrides; the chart's own defaults live
+        // in chart.values. Showing the defaults would bury the two lines
+        // somebody actually set under a thousand they did not.
+        let detail =
+            release_detail_from(vec![release_json()], "monitoring", "prom").expect("build detail");
+        assert!(detail.values.contains("grafana"));
+        assert!(detail.values.contains("enabled"));
+    }
+
+    #[test]
+    fn a_release_installed_with_no_overrides_shows_empty_values() {
+        // `helm install` with no -f and no --set. Rendering "{}" or
+        // "null" would read as a value someone set.
+        let mut release = release_json();
+        release["config"] = json!({});
+        let detail =
+            release_detail_from(vec![release], "monitoring", "prom").expect("build detail");
+        assert_eq!(detail.values, "");
+
+        let mut null_config = release_json();
+        null_config["config"] = serde_json::Value::Null;
+        let detail =
+            release_detail_from(vec![null_config], "monitoring", "prom").expect("build detail");
+        assert_eq!(detail.values, "");
+    }
+
+    #[test]
+    fn a_release_with_no_readable_revisions_says_so_by_name() {
+        // Reached when every Secret for the name failed to decode. The
+        // error has to name the release and namespace, because the next
+        // question is always "which one".
+        let err = release_detail_from(Vec::new(), "monitoring", "prom")
+            .expect_err("no revisions is an error");
+        let message = err.to_string();
+        assert!(message.contains("prom"), "{message}");
+        assert!(message.contains("monitoring"), "{message}");
+    }
+
+    #[test]
+    fn detail_carries_the_notes_and_chart_metadata_the_view_renders() {
+        let detail =
+            release_detail_from(vec![release_json()], "monitoring", "prom").expect("build detail");
+
+        assert_eq!(detail.chart_name, "kube-prometheus-stack");
+        assert_eq!(detail.chart_version.as_deref(), Some("85.3.3"));
+        assert_eq!(detail.chart, "kube-prometheus-stack-85.3.3");
+        // Usually the only place a chart says how to reach what it
+        // installed, so losing it costs the user the next step.
+        assert_eq!(
+            detail.notes.as_deref(),
+            Some("browse http://localhost:3000")
+        );
+        assert!(detail.manifest.contains("kind: Service"));
+    }
+
+    #[test]
+    fn a_release_whose_payload_omits_its_own_name_falls_back_to_the_secrets() {
+        // The name and namespace were already known from the Secret; a
+        // payload missing them should not produce a detail page titled
+        // with an empty string.
+        let detail = release_detail_from(
+            vec![json!({"version": 1, "info": {"status": "deployed"}})],
+            "monitoring",
+            "prom",
+        )
+        .expect("build detail");
+        assert_eq!(detail.name, "prom");
+        assert_eq!(detail.namespace, "monitoring");
     }
 
     #[tokio::test]

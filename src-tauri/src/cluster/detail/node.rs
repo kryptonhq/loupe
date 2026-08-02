@@ -302,10 +302,7 @@ fn quantities(
 pub async fn get_node(session: &Session, name: &str) -> Result<NodeDetail> {
     let client = session.client().await?;
     let api: Api<Node> = Api::all(client.clone());
-    let mut node = api.get(name).await?;
-    node.metadata.managed_fields = None;
-
-    let yaml = to_yaml(&node)?;
+    let node = api.get(name).await?;
 
     // Pods are fetched server-side by node, not filtered client-side
     // from a cluster-wide listing: on a large cluster the difference is
@@ -315,6 +312,19 @@ pub async fn get_node(session: &Session, name: &str) -> Result<NodeDetail> {
         .list(&ListParams::default().fields(&format!("spec.nodeName={name}")))
         .await?
         .items;
+
+    node_detail_from(node, &scheduled)
+}
+
+/// Builds the node detail from the node and the pods scheduled onto it.
+///
+/// Split from the fetch so the parts an operator reads when nothing will
+/// schedule — taints, cordon state, allocation against allocatable — can
+/// be tested against constructed nodes.
+pub(crate) fn node_detail_from(mut node: Node, scheduled: &[Pod]) -> Result<NodeDetail> {
+    node.metadata.managed_fields = None;
+
+    let yaml = to_yaml(&node)?;
 
     let status = node.status.clone();
     let info = status.as_ref().and_then(|s| s.node_info.as_ref());
@@ -357,7 +367,7 @@ pub async fn get_node(session: &Session, name: &str) -> Result<NodeDetail> {
         operating_system: info.map(|i| i.operating_system.clone()),
         capacity: quantities(status.as_ref().and_then(|s| s.capacity.as_ref())),
         allocatable: quantities(allocatable),
-        allocated: allocated_from(&scheduled, alloc_cpu, alloc_mem),
+        allocated: allocated_from(scheduled, alloc_cpu, alloc_mem),
         taints: node
             .spec
             .as_ref()
@@ -553,6 +563,220 @@ mod tests {
         let usage = allocated_from(&pods, None, None);
         assert_eq!(usage[0].requests_percent, None);
         assert_eq!(usage[0].allocatable, "—");
+    }
+
+    /// A node with the shape the detail view reads: capacity, a Ready
+    /// condition, and the labels roles come from.
+    fn node(name: &str) -> Node {
+        use k8s_openapi::api::core::v1::{NodeCondition, NodeStatus, NodeSystemInfo};
+
+        let quantities = |cpu: &str, mem: &str| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("cpu".to_string(), Quantity(cpu.into()));
+            m.insert("memory".to_string(), Quantity(mem.into()));
+            m
+        };
+
+        Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some(name.into()),
+                labels: Some(
+                    [("node-role.kubernetes.io/worker", "")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            status: Some(NodeStatus {
+                capacity: Some(quantities("8", "16Gi")),
+                allocatable: Some(quantities("7800m", "15Gi")),
+                conditions: Some(vec![NodeCondition {
+                    type_: "Ready".into(),
+                    status: "True".into(),
+                    ..Default::default()
+                }]),
+                node_info: Some(NodeSystemInfo {
+                    kubelet_version: "v1.33.1".into(),
+                    os_image: "Debian GNU/Linux 12".into(),
+                    architecture: "arm64".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_cordoned_node_is_still_ready_but_not_schedulable() {
+        // The pair is the whole explanation for "why is nothing landing
+        // here". Collapsing them into one flag loses the answer:
+        // `kubectl cordon` does not make a node unhealthy.
+        let mut cordoned = node("worker-1");
+        cordoned.spec = Some(k8s_openapi::api::core::v1::NodeSpec {
+            unschedulable: Some(true),
+            ..Default::default()
+        });
+
+        let detail = node_detail_from(cordoned, &[]).expect("build detail");
+        assert!(detail.ready, "cordoning does not make a node unhealthy");
+        assert!(!detail.schedulable);
+    }
+
+    #[test]
+    fn a_node_with_no_spec_is_schedulable() {
+        // `unschedulable` absent means schedulable. Defaulting the other
+        // way would show every healthy node as cordoned.
+        let detail = node_detail_from(node("worker-1"), &[]).expect("build detail");
+        assert!(detail.schedulable);
+        assert!(detail.ready);
+        assert_eq!(detail.roles, vec!["worker"]);
+        assert_eq!(detail.version, "v1.33.1");
+        assert_eq!(detail.architecture.as_deref(), Some("arm64"));
+    }
+
+    #[test]
+    fn taints_render_the_way_they_are_written() {
+        // The form they are applied in, so what the page shows can be
+        // pasted back into a toleration.
+        use k8s_openapi::api::core::v1::{NodeSpec, Taint};
+
+        let mut tainted = node("worker-1");
+        tainted.spec = Some(NodeSpec {
+            taints: Some(vec![
+                Taint {
+                    key: "dedicated".into(),
+                    value: Some("gpu".into()),
+                    effect: "NoSchedule".into(),
+                    ..Default::default()
+                },
+                // A valueless taint is common — the control-plane one is
+                // exactly this shape — and "key=:Effect" would be wrong.
+                Taint {
+                    key: "node.kubernetes.io/unreachable".into(),
+                    value: None,
+                    effect: "NoExecute".into(),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        });
+
+        let detail = node_detail_from(tainted, &[]).expect("build detail");
+        assert_eq!(
+            detail.taints,
+            vec![
+                "dedicated=gpu:NoSchedule",
+                "node.kubernetes.io/unreachable:NoExecute"
+            ]
+        );
+    }
+
+    #[test]
+    fn allocation_is_measured_against_allocatable_not_capacity() {
+        // The kubelet reserves part of the machine for itself and the
+        // scheduler only hands out what is left. Measuring against
+        // capacity would flatter every node — here 4 of 8 cores reads as
+        // 50%, when the scheduler only has 7.8 to give.
+        let pods = vec![pod("Running", vec![container("4", "4Gi")], vec![])];
+        let detail = node_detail_from(node("worker-1"), &pods).expect("build detail");
+
+        let cpu = detail.allocated.iter().find(|u| u.name == "CPU").unwrap();
+        assert_eq!(cpu.allocatable, "7800m");
+        assert_eq!(
+            cpu.requests_percent,
+            Some(51),
+            "4 cores of 7.8 allocatable, not of 8 capacity"
+        );
+        assert_eq!(detail.pod_count, 1);
+        // Capacity is still reported, just not what percentages are of.
+        assert!(detail.capacity.iter().any(|(k, v)| k == "cpu" && v == "8"));
+    }
+
+    #[test]
+    fn a_node_with_nothing_scheduled_reports_zero_rather_than_nothing() {
+        // An empty node still has rows: "0 of 7800m" is information,
+        // whereas a missing table reads as a failure to load.
+        let detail = node_detail_from(node("worker-1"), &[]).expect("build detail");
+        assert_eq!(detail.pod_count, 0);
+        assert_eq!(detail.allocated.len(), 2, "CPU and Memory");
+        assert_eq!(detail.allocated[0].requests_percent, Some(0));
+    }
+
+    #[test]
+    fn node_detail_strips_managed_fields_and_carries_its_identity() {
+        let mut noisy = node("worker-1");
+        noisy.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("kubelet".into()),
+                ..Default::default()
+            },
+        ]);
+
+        let detail = node_detail_from(noisy, &[]).expect("build detail");
+        assert!(!detail.yaml.contains("managedFields"));
+        assert_eq!(detail.api_version, "v1");
+        assert_eq!(detail.kind, "Node");
+        assert_eq!(detail.name, "worker-1");
+    }
+
+    #[test]
+    fn a_node_reporting_no_status_still_renders() {
+        // A node mid-registration. Every optional field is absent, and
+        // the page has to degrade rather than fail.
+        let bare = Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some("joining".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let detail = node_detail_from(bare, &[]).expect("build detail");
+        assert!(!detail.ready);
+        assert!(detail.schedulable);
+        assert!(detail.conditions.is_empty());
+        assert!(detail.addresses.is_empty());
+        assert!(detail.capacity.is_empty());
+        assert_eq!(detail.os_image, None);
+        // The allocation table still exists, with nothing known to
+        // measure against.
+        assert_eq!(detail.allocated[0].allocatable, "—");
+    }
+
+    #[test]
+    fn conditions_carry_the_reason_that_explains_the_pressure() {
+        // "MemoryPressure=True" says the node is under pressure;
+        // the reason says which threshold tripped, and that is what
+        // decides what to do about it.
+        use k8s_openapi::api::core::v1::{NodeCondition, NodeStatus};
+
+        let mut pressured = node("worker-1");
+        pressured.status = Some(NodeStatus {
+            conditions: Some(vec![NodeCondition {
+                type_: "MemoryPressure".into(),
+                status: "True".into(),
+                reason: Some("KubeletHasInsufficientMemory".into()),
+                message: Some("kubelet has insufficient memory available".into()),
+                ..Default::default()
+            }]),
+            ..pressured.status.unwrap()
+        });
+
+        let detail = node_detail_from(pressured, &[]).expect("build detail");
+        let pressure = detail
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "MemoryPressure")
+            .expect("condition should survive");
+        assert_eq!(
+            pressure.reason.as_deref(),
+            Some("KubeletHasInsufficientMemory")
+        );
+        assert!(pressure.message.is_some());
+        // No Ready condition in this status, so the node is not Ready.
+        assert!(!detail.ready);
     }
 
     #[tokio::test]

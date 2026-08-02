@@ -169,12 +169,20 @@ fn is_conflict(error: &kube::Error) -> bool {
     }
 }
 
-pub async fn apply_yaml(session: &Session, target: EditTarget, yaml: &str) -> Result<ApplyResult> {
+/// Everything an edit can be rejected for without asking the cluster.
+///
+/// Parsing, the identity checks, and the conversion to an object all
+/// happen here, so the request that eventually goes out is one that has
+/// already been proven to target what the editor was opened on. Split
+/// from `apply_yaml` because this is the half that decides whether a
+/// write is safe, and it should be provable without a cluster to write
+/// to.
+pub(crate) fn prepare(target: &EditTarget, yaml: &str) -> Result<(GvkRef, DynamicObject)> {
     let doc: serde_json::Value = serde_yaml::from_str(yaml)
         .map_err(|e| AppError::InvalidEdit(format!("this is not valid YAML: {e}")))?;
 
     let found = identity_of(&doc)?;
-    check(&target, &found)?;
+    check(target, &found)?;
 
     let (group, version) = split_api_version(&found.api_version)?;
     let gvk = GvkRef {
@@ -182,16 +190,23 @@ pub async fn apply_yaml(session: &Session, target: EditTarget, yaml: &str) -> Re
         version,
         kind: found.kind.clone(),
     };
+
+    let object: DynamicObject = serde_json::from_value(doc)
+        .map_err(|e| AppError::InvalidEdit(format!("this is not a Kubernetes object: {e}")))?;
+
+    Ok((gvk, object))
+}
+
+pub async fn apply_yaml(session: &Session, target: EditTarget, yaml: &str) -> Result<ApplyResult> {
+    let (gvk, object) = prepare(&target, yaml)?;
+
     let (resource, caps) = resolve(session, &gvk).await?;
     if !caps.supports_operation("update") {
         return Err(AppError::InvalidEdit(format!(
             "this cluster does not accept updates to {}",
-            found.kind
+            gvk.kind
         )));
     }
-
-    let object: DynamicObject = serde_json::from_value(doc)
-        .map_err(|e| AppError::InvalidEdit(format!("this is not a Kubernetes object: {e}")))?;
 
     let client = session.client().await?;
     let api = api_for(client, &resource, &caps, target.namespace.as_deref());
@@ -365,6 +380,117 @@ mod tests {
         assert_eq!(found.namespace.as_deref(), Some("default"));
         assert_eq!(found.resource_version.as_deref(), Some("12345"));
         assert_eq!(found.kind, "ConfigMap");
+    }
+
+    /// The document, as the editor would hand it back.
+    fn yaml_of(doc: &serde_json::Value) -> String {
+        serde_yaml::to_string(doc).unwrap()
+    }
+
+    #[test]
+    fn a_valid_edit_resolves_to_the_kind_it_came_from() {
+        let (gvk, object) = prepare(&target(), &yaml_of(&document())).expect("should prepare");
+        // The core group is empty rather than absent; a GvkRef with
+        // group "v1" would resolve to nothing.
+        assert_eq!(gvk.group, "");
+        assert_eq!(gvk.version, "v1");
+        assert_eq!(gvk.kind, "ConfigMap");
+        assert_eq!(object.metadata.name.as_deref(), Some("settings"));
+        assert_eq!(
+            object.metadata.resource_version.as_deref(),
+            Some("12345"),
+            "the resourceVersion has to survive into the request, or the \
+             replace becomes a blind overwrite"
+        );
+    }
+
+    #[test]
+    fn a_grouped_kind_resolves_to_its_own_group() {
+        let doc = json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "prod", "resourceVersion": "9"}
+        });
+        let target = EditTarget {
+            api_version: "apps/v1".into(),
+            kind: "Deployment".into(),
+            namespace: Some("prod".into()),
+            name: "web".into(),
+        };
+
+        let (gvk, _) = prepare(&target, &yaml_of(&doc)).expect("should prepare");
+        assert_eq!(gvk.group, "apps");
+        assert_eq!(gvk.version, "v1");
+    }
+
+    #[test]
+    fn a_renamed_document_never_reaches_the_cluster() {
+        // The check that matters most. Kubernetes has no rename, so a
+        // changed name either fails or — for a name that happens to
+        // exist — overwrites a bystander. It has to be caught here,
+        // before anything is sent.
+        let mut doc = document();
+        doc["metadata"]["name"] = json!("something-else");
+
+        let err = prepare(&target(), &yaml_of(&doc)).expect_err("must be refused");
+        assert!(matches!(err, AppError::InvalidEdit(_)));
+        let message = err.to_string();
+        assert!(message.contains("settings"), "{message}");
+        assert!(message.contains("something-else"), "{message}");
+    }
+
+    #[test]
+    fn an_edit_that_moves_namespace_never_reaches_the_cluster() {
+        // Same reasoning as the rename: writing to `kube-system` because
+        // someone edited a line is not an outcome the editor should be
+        // able to produce.
+        let mut doc = document();
+        doc["metadata"]["namespace"] = json!("kube-system");
+        assert!(prepare(&target(), &yaml_of(&doc)).is_err());
+    }
+
+    #[test]
+    fn malformed_yaml_is_refused_before_anything_is_parsed_as_an_object() {
+        let err = prepare(&target(), "kind: : :\n  bad").expect_err("must be refused");
+        assert!(matches!(err, AppError::InvalidEdit(_)));
+        assert!(err.to_string().contains("YAML"), "{err}");
+    }
+
+    #[test]
+    fn a_document_whose_metadata_is_not_a_map_is_refused_rather_than_panicking() {
+        // Hand-edited YAML can produce this. It parses, and it is not an
+        // object we can apply.
+        let doc = json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": "oops"});
+        assert!(prepare(&target(), &yaml_of(&doc)).is_err());
+    }
+
+    #[test]
+    fn the_api_servers_409_is_recognised_as_a_conflict() {
+        // This is what turns a raw failure into the editor's "reload and
+        // re-apply" path. Matching on the status code rather than on
+        // prose keeps it working across kube versions.
+        // Built the way the API server sends it, so the shape is the
+        // one the client actually parses rather than one made up here.
+        let status = |code: u16, reason: &str| {
+            kube::Error::Api(Box::new(
+                serde_json::from_value(json!({
+                    "status": "Failure",
+                    "code": code,
+                    "reason": reason,
+                    "message": "the object has been modified",
+                }))
+                .expect("parse status"),
+            ))
+        };
+
+        assert!(is_conflict(&status(409, "Conflict")));
+
+        let forbidden = status(403, "Forbidden");
+        assert!(
+            !is_conflict(&forbidden),
+            "an RBAC denial is not a stale-edit conflict, and offering \
+             'reload and retry' for one would send the user in circles"
+        );
     }
 
     /// Round-trips a real edit: read a ConfigMap, change it, apply it,

@@ -126,10 +126,7 @@ fn quota_views(quotas: Vec<ResourceQuota>) -> Vec<QuotaView> {
 pub async fn get_namespace(session: &Session, name: &str) -> Result<NamespaceDetail> {
     let client = session.client().await?;
     let api: Api<Namespace> = Api::all(client.clone());
-    let mut ns = api.get(name).await?;
-    ns.metadata.managed_fields = None;
-
-    let yaml = to_yaml(&ns)?;
+    let ns = api.get(name).await?;
 
     let pods: Api<Pod> = Api::namespaced(client.clone(), name);
     let pod_list = pods.list(&ListParams::default()).await?.items;
@@ -141,8 +138,26 @@ pub async fn get_namespace(session: &Session, name: &str) -> Result<NamespaceDet
     let quotas = quotas
         .list(&ListParams::default())
         .await
-        .map(|l| quota_views(l.items))
+        .map(|l| l.items)
         .unwrap_or_default();
+
+    namespace_detail_from(ns, &pod_list, quotas)
+}
+
+/// Builds the namespace detail from the namespace and its contents.
+///
+/// Split from the fetch so the two things this page exists to answer —
+/// what is unhealthy inside, and what is capping it — can be tested
+/// without a cluster.
+pub(crate) fn namespace_detail_from(
+    mut ns: Namespace,
+    pod_list: &[Pod],
+    quotas: Vec<ResourceQuota>,
+) -> Result<NamespaceDetail> {
+    ns.metadata.managed_fields = None;
+
+    let yaml = to_yaml(&ns)?;
+    let quotas = quota_views(quotas);
 
     Ok(NamespaceDetail {
         api_version: "v1".into(),
@@ -157,7 +172,7 @@ pub async fn get_namespace(session: &Session, name: &str) -> Result<NamespaceDet
         annotations: sorted_pairs(ns.annotations()),
         finalizers: ns.finalizers().to_vec(),
         pod_count: pod_list.len(),
-        pods_by_phase: tally(&pod_list),
+        pods_by_phase: tally(pod_list),
         quotas,
         name: ns.name_any(),
         yaml,
@@ -254,6 +269,94 @@ mod tests {
             .find(|e| e.resource == "pods")
             .unwrap();
         assert_eq!(pods.used, "3");
+    }
+
+    fn namespace(name: &str, phase: Option<&str>) -> Namespace {
+        Namespace {
+            metadata: kube::core::ObjectMeta {
+                name: Some(name.into()),
+                ..Default::default()
+            },
+            status: Some(k8s_openapi::api::core::v1::NamespaceStatus {
+                phase: phase.map(str::to_string),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_stuck_terminating_namespace_shows_the_finalizer_holding_it() {
+        // A namespace that will not go away is always a finalizer nobody
+        // is answering for, and naming it is the entire diagnosis.
+        let mut ns = namespace("doomed", Some("Terminating"));
+        ns.spec = Some(k8s_openapi::api::core::v1::NamespaceSpec {
+            finalizers: Some(vec!["kubernetes".into()]),
+        });
+        ns.metadata.finalizers = Some(vec!["custom.io/cleanup".into()]);
+
+        let detail = namespace_detail_from(ns, &[], Vec::new()).expect("build detail");
+        assert_eq!(detail.phase, "Terminating");
+        assert_eq!(detail.finalizers, vec!["custom.io/cleanup"]);
+    }
+
+    #[test]
+    fn the_tally_always_adds_up_to_the_count_beside_it() {
+        // These two numbers sit next to each other on the page. If they
+        // disagree the page is visibly wrong, whichever one is right.
+        let pods = vec![
+            pod(Some("Running")),
+            pod(Some("Running")),
+            pod(Some("Failed")),
+            pod(None),
+            pod(Some("SomethingNew")),
+        ];
+
+        let detail = namespace_detail_from(namespace("prod", Some("Active")), &pods, Vec::new())
+            .expect("build detail");
+
+        assert_eq!(detail.pod_count, 5);
+        assert_eq!(
+            detail.pods_by_phase.iter().map(|t| t.count).sum::<usize>(),
+            detail.pod_count
+        );
+        // Failed leads: it is what the namespace was opened to find.
+        assert_eq!(detail.pods_by_phase[0].phase, "Failed");
+    }
+
+    #[test]
+    fn an_empty_namespace_reports_no_pods_and_no_quotas() {
+        let detail = namespace_detail_from(namespace("empty", Some("Active")), &[], Vec::new())
+            .expect("build detail");
+        assert_eq!(detail.pod_count, 0);
+        assert!(detail.pods_by_phase.is_empty(), "no rows of zeroes");
+        assert!(detail.quotas.is_empty());
+        assert!(detail.finalizers.is_empty());
+    }
+
+    #[test]
+    fn namespace_detail_carries_its_identity_and_strips_managed_fields() {
+        let mut ns = namespace("prod", Some("Active"));
+        ns.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("kube-apiserver".into()),
+                ..Default::default()
+            },
+        ]);
+
+        let detail = namespace_detail_from(ns, &[], Vec::new()).expect("build detail");
+        assert_eq!(detail.api_version, "v1");
+        assert_eq!(detail.kind, "Namespace");
+        assert_eq!(detail.name, "prod");
+        assert!(detail.yaml.contains("kind: Namespace"));
+        assert!(!detail.yaml.contains("managedFields"));
+    }
+
+    #[test]
+    fn a_namespace_with_no_status_reads_as_unknown() {
+        let detail =
+            namespace_detail_from(namespace("odd", None), &[], Vec::new()).expect("build detail");
+        assert_eq!(detail.phase, "Unknown");
     }
 
     #[test]

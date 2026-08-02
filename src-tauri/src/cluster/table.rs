@@ -20,7 +20,7 @@ use kube::core::{Request, Resource};
 use kube::discovery::Scope;
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::discovery::{resolve, GvkRef};
+use crate::cluster::discovery::{resolve, scoped_namespace, GvkRef};
 use crate::cluster::Session;
 use crate::error::{AppError, Result};
 
@@ -171,12 +171,9 @@ pub async fn list_table(
     let (resource, caps) = resolve(session, &gvk).await?;
 
     let namespaced = matches!(caps.scope, Scope::Namespaced);
-    // The resource's own scope wins: asking for a namespace on a
-    // cluster-scoped kind builds a URL the API server does not serve.
-    let scope = match (namespaced, namespace.as_deref()) {
-        (true, Some(ns)) if !ns.is_empty() => Some(ns),
-        _ => None,
-    };
+    // Same rule the object-listing path uses, so a table and the listing
+    // behind it can never disagree about which URL they are talking to.
+    let scope = scoped_namespace(namespaced, namespace.as_deref());
 
     let url = <kube::api::DynamicObject as Resource>::url_path(&resource, scope);
     let request = Request::new(url)

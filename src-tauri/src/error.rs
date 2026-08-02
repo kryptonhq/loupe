@@ -97,3 +97,95 @@ impl Serialize for AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn serialised(e: AppError) -> serde_json::Value {
+        serde_json::to_value(e).expect("errors must serialise; the IPC boundary requires it")
+    }
+
+    #[test]
+    fn every_error_crosses_the_boundary_as_kind_and_message() {
+        // The frontend branches on `kind` and shows `message`. Anything
+        // else — a bare string, a tagged enum — silently breaks both.
+        let value = serialised(AppError::NotConnected);
+        assert_eq!(value["kind"], "not_connected");
+        assert_eq!(value["message"], "not connected to a cluster");
+        assert_eq!(
+            value.as_object().map(|o| o.len()),
+            Some(2),
+            "exactly two fields: {value}"
+        );
+    }
+
+    #[test]
+    fn the_discriminants_match_what_the_frontend_compares_against() {
+        // These strings are a contract with src/lib/api.ts. Renaming one
+        // here is a silent behaviour change over there — `isConflict`
+        // stops matching and the editor loses its reload-and-retry path.
+        let cases = [
+            (AppError::Kubeconfig("x".into()), "kubeconfig"),
+            (AppError::UnknownContext("x".into()), "unknown_context"),
+            (AppError::NotConnected, "not_connected"),
+            (AppError::UnknownResource("x".into()), "unknown_resource"),
+            (AppError::InvalidEdit("x".into()), "invalid_edit"),
+            (AppError::Conflict("x".into()), "conflict"),
+            (AppError::Settings("x".into()), "settings"),
+            (AppError::Kube("x".into()), "kubernetes"),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(serialised(error)["kind"], expected);
+        }
+    }
+
+    #[test]
+    fn an_rbac_denial_keeps_the_servers_own_wording() {
+        // "forbidden: User cannot list pods in namespace prod" is the
+        // whole answer. Replacing it with a generic "request failed"
+        // turns a solvable permissions problem into a mystery.
+        let message = "pods is forbidden: User \"dev\" cannot list resource \"pods\"";
+        let value = serialised(AppError::Kube(message.into()));
+        assert!(
+            value["message"].as_str().unwrap().contains(message),
+            "got {value}"
+        );
+    }
+
+    #[test]
+    fn a_conflict_carries_its_message_unprefixed() {
+        // The editor shows this text directly next to a "Discard &
+        // reload" button, so a prefix like "kubernetes: " would read as
+        // noise in the one place the wording was written for the user.
+        let value = serialised(AppError::Conflict(
+            "the object was changed in the cluster".into(),
+        ));
+        assert_eq!(value["message"], "the object was changed in the cluster");
+    }
+
+    #[test]
+    fn context_and_settings_errors_say_what_went_wrong() {
+        assert_eq!(
+            AppError::UnknownContext("staging".into()).to_string(),
+            "no such context: staging"
+        );
+        // Prefixed, because this one surfaces in a log rather than in a
+        // dialog written for the user.
+        assert_eq!(
+            AppError::Settings("disk full".into()).to_string(),
+            "settings: disk full"
+        );
+    }
+
+    #[test]
+    fn a_kube_error_converts_rather_than_being_stringified_at_the_call_site() {
+        // `?` on a kube::Error has to land on the Kube variant. If the
+        // From impl were missing, every call site would need its own
+        // map_err and one of them would eventually get it wrong.
+        let err: AppError = kube::Error::LinesCodecMaxLineLengthExceeded.into();
+        assert!(matches!(err, AppError::Kube(_)));
+        assert_eq!(serialised(err)["kind"], "kubernetes");
+    }
+}
