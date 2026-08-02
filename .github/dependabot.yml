@@ -26,8 +26,11 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      # Tauri's crates move together and only work together; splitting
-      # them produces PRs that cannot build on their own.
+      # These two keep their majors grouped, unlike the npm tooling
+      # group below. Tauri's crates move together and only work
+      # together, and so do kube and k8s-openapi; splitting either
+      # produces PRs that cannot build on their own. The coupling is
+      # real here, where in the tooling group it was only alphabetical.
       tauri:
         patterns:
           - "tauri*"
@@ -52,13 +55,31 @@ updates:
       default-days: 7
     groups:
       react:
+        update-types:
+          - minor
+          - patch
         patterns:
           - "react"
           - "react-dom"
           - "@types/react*"
       # The test and build toolchain. Every advisory this repository has
       # had so far came from here, and none of it ships in the app.
+      #
+      # Minor and patch only, deliberately. Grouped majors produced one
+      # PR carrying TypeScript 5->7, Tailwind 3->4, Vite 7->8 and Vitest
+      # 3->4 together, which could only be merged or closed as a unit —
+      # and Tailwind 4 alone is a migration (its PostCSS plugin moved to
+      # `@tailwindcss/postcss` and the config format changed), so the
+      # unit was always going to be "closed". The five bumps that were
+      # fine went with it.
+      #
+      # A package whose major does not match this group falls outside
+      # every group and gets its own PR, which is what a migration
+      # wants: one at a time, reviewed on its own terms.
       tooling:
+        update-types:
+          - minor
+          - patch
         patterns:
           - "vite*"
           - "@vitejs/*"
