@@ -111,9 +111,8 @@ and the error is surfaced rather than swallowed into an empty table.
 brew install --cask kryptonhq/tap/loupe
 ```
 
-Loupe is not notarised by Apple yet, so macOS blocks the first launch.
-Allow it once under **System Settings → Privacy & Security → Open
-Anyway**, or install with `--no-quarantine`.
+The macOS builds are signed with a Developer ID and notarised, so the
+app opens on a double-click — nothing to allow in System Settings.
 
 Or take a build from [releases](https://github.com/kryptonhq/loupe/releases):
 
@@ -123,6 +122,10 @@ Or take a build from [releases](https://github.com/kryptonhq/loupe/releases):
 | macOS (Intel) | `Loupe_<version>_x64.dmg` |
 | Linux | `.AppImage` (portable) or `.deb` |
 | Windows | `-setup.exe` or `.msi` |
+
+The Windows installers are not signed yet, so SmartScreen will warn on
+first run — choose **More info → Run anyway**. Signing them is on the
+list; see [RELEASING.md](RELEASING.md#windows).
 
 Loupe reads the same kubeconfig as `kubectl`, so there is nothing to
 configure — it lists the contexts you already have.
