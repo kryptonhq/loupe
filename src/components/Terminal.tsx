@@ -35,6 +35,20 @@ import { useCluster } from "../lib/clusterContext";
 const MIN_COLS = 20;
 const MIN_ROWS = 5;
 
+/// One of the app's colour tokens, as something xterm will accept.
+///
+/// The tokens hold bare `R G B` triples because Tailwind composes them
+/// with an alpha; xterm wants a colour string. Falls back rather than
+/// throwing, since a terminal with slightly wrong colours beats no
+/// terminal.
+function cssColour(token: string, fallback: string): string {
+  if (typeof getComputedStyle !== "function") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim();
+  return value ? `rgb(${value})` : fallback;
+}
+
 export function Terminal({
   namespace,
   pod,
@@ -83,27 +97,43 @@ function ShellSession({
   // with.
   const sessionId = useRef<number | null>(null);
 
+  // Every argument to useXTerm has to keep its identity across renders.
+  // The hook rebuilds the terminal on `[options, addons]` and re-binds
+  // on `[listeners]`, so a fresh object literal each render rebuilds it
+  // each render — and since rebuilding sets state, that is an infinite
+  // loop. It presents as a terminal stuck on "opening", a black pane
+  // that never paints, and exec sessions opened and closed against the
+  // cluster as fast as React can render.
   const fit = useMemo(() => new FitAddon(), []);
+  const addons = useMemo(() => [fit], [fit]);
 
-  const { ref, instance } = useXTerm({
-    options: {
+  const options = useMemo(
+    () => ({
       cursorBlink: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 12,
-      // Transparent, so the surrounding theme shows through rather than
-      // the terminal sitting in a black rectangle in light mode.
-      theme: { background: "rgba(0,0,0,0)" },
+      // Taken from the app's own palette rather than left transparent:
+      // xterm ignores an alpha background unless `allowTransparency` is
+      // on, and the result is a black rectangle in light mode.
+      theme: {
+        background: cssColour("--code-bg", "#1e1e1e"),
+        foreground: cssColour("--code-fg", "#d4d4d4"),
+      },
       // Bounded for the same reason the log viewer is: a command that
       // prints forever must not grow memory without limit.
       scrollback: 5000,
-    },
-    addons: [fit],
-    listeners: {
+    }),
+    [],
+  );
+
+  const listeners = useMemo(
+    () => ({
       // Every keystroke, as the terminal encodes it — arrows, Tab,
       // Ctrl-C, paste, all of it. This is what the old input box could
-      // not do.
-      onData: (data) => {
+      // not do. Reads the session from a ref so the handler can be built
+      // once and still see the current session.
+      onData: (data: string) => {
         const id = sessionId.current;
         // xterm is live as soon as it mounts; anything typed before the
         // session exists has nowhere to go.
@@ -113,8 +143,11 @@ function ShellSession({
           setStatus("closed");
         });
       },
-    },
-  });
+    }),
+    [],
+  );
+
+  const { ref, instance } = useXTerm({ options, addons, listeners });
 
   useEffect(() => {
     if (!instance || !container) return;

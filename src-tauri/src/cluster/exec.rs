@@ -341,8 +341,11 @@ async fn probe_shell(api: &Api<Pod>, opts: &ExecOptions) -> Result<String> {
         // had refused them a shell. Draining first also avoids the
         // converse deadlock, where a full buffer blocks the task while
         // `join` waits for that same task.
-        drain(process.stdout()).await;
-        drain(process.stderr()).await;
+        // Concurrently, not one after the other. Draining stdout to EOF
+        // first would deadlock a shell that fills the stderr buffer
+        // while doing it: the task blocks writing stderr, so it never
+        // closes stdout, so the first drain never finishes.
+        tokio::join!(drain(process.stdout()), drain(process.stderr()));
 
         let outcome = match status {
             Some(status) => status.await,

@@ -36,8 +36,34 @@ const instance = {
 /// also exactly what the component must not be sensitive to.
 const mountRef = { current: null as HTMLDivElement | null };
 
+/// Counts how many times the real hook would have rebuilt the terminal.
+///
+/// `useXTerm` keys its effects on `[options, addons]` and `[listeners]`,
+/// so a fresh object literal on each render rebuilds the terminal on
+/// each render — and because rebuilding sets state, that is an infinite
+/// loop. Mirroring that here is what turns a hang in the app into a
+/// failing assertion.
+const built = { count: 0 };
+let lastOptions: unknown;
+let lastAddons: unknown;
+let lastListeners: unknown;
+
 vi.mock("react-xtermjs", () => ({
-  useXTerm: ({ listeners }: { listeners?: { onData?: (d: string) => void } }) => {
+  useXTerm: ({
+    options,
+    addons,
+    listeners,
+  }: {
+    options?: unknown;
+    addons?: unknown;
+    listeners?: { onData?: (d: string) => void };
+  }) => {
+    if (options !== lastOptions || addons !== lastAddons) {
+      lastOptions = options;
+      lastAddons = addons;
+      built.count += 1;
+    }
+    lastListeners = listeners;
     onData = listeners?.onData ?? null;
     return { ref: mountRef, instance };
   },
@@ -113,6 +139,10 @@ beforeEach(() => {
   written.length = 0;
   cleared.count = 0;
   onData = null;
+  built.count = 0;
+  lastOptions = undefined;
+  lastAddons = undefined;
+  lastListeners = undefined;
 
   startExec.mockReset();
   writeExec.mockReset();
@@ -289,6 +319,50 @@ describe("Terminal", () => {
     expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
     expect(screen.getByText(/read-only/)).toBeInTheDocument();
     expect(startExec).not.toHaveBeenCalled();
+  });
+
+  it("builds the terminal once, however many times it renders", async () => {
+    // Regression. Every argument to useXTerm has to keep its identity:
+    // the hook rebuilds on `[options, addons]` and re-binds on
+    // `[listeners]`, so fresh literals rebuild on every render, and
+    // because rebuilding sets state that is an infinite loop. It
+    // presented as a terminal stuck on "opening", a pane that never
+    // painted, and exec sessions churned against the cluster as fast as
+    // React could render.
+    setup();
+    await waitFor(() => expect(startExec).toHaveBeenCalled());
+
+    // Several state changes, each one a render.
+    emit({ kind: "started", shell: "/bin/sh" });
+    emit({ kind: "output", data: "hello" });
+    emit({ kind: "output", data: " again" });
+
+    expect(built.count).toBe(1);
+    expect(startExec).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the keystroke handler's identity across renders", async () => {
+    // Same hazard, different effect: a new `listeners` object re-binds
+    // xterm's data handler on every render.
+    setup();
+    await waitFor(() => expect(startExec).toHaveBeenCalled());
+    const first = lastListeners;
+
+    emit({ kind: "started", shell: "/bin/sh" });
+    emit({ kind: "output", data: "a render or two later" });
+
+    expect(lastListeners).toBe(first);
+  });
+
+  it("reaches a settled state rather than reopening forever", async () => {
+    // The symptom the user saw: stuck on "opening a shell…" because the
+    // session restarted before it could report itself open.
+    setup();
+    await waitFor(() => expect(startExec).toHaveBeenCalled());
+    emit({ kind: "started", shell: "/bin/sh" });
+
+    expect(await screen.findByText("/bin/sh")).toBeInTheDocument();
+    expect(screen.queryByText("opening a shell…")).not.toBeInTheDocument();
   });
 
   it("does not offer a shell in an init container", async () => {
