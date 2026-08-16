@@ -13,6 +13,7 @@ pub mod discovery;
 pub mod edit;
 pub mod helm;
 pub mod logs;
+pub mod related;
 pub mod resources;
 pub mod table;
 

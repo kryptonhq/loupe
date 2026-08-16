@@ -275,6 +275,30 @@ export interface ObjectDetail extends Editable {
   yaml: string;
 }
 
+/// Why two objects are related. Doubles as the section heading.
+export type Relation =
+  | "ownedBy"
+  | "owns"
+  | "selects"
+  | "selectedBy"
+  | "uses"
+  | "routes";
+
+export interface RelatedObject {
+  relation: Relation;
+  group: string;
+  version: string;
+  kind: string;
+  name: string;
+  namespace: string | null;
+  /// False when the object is referenced but could not be read. Shown
+  /// rather than dropped — a dangling owner reference is usually the
+  /// explanation for whatever you are looking at.
+  reachable: boolean;
+  /// Extra wording for the row, such as which volume mounts it.
+  detail: string | null;
+}
+
 /// Persisted user preferences. Stored as JSON in the app's config
 /// directory by the Rust side, not in the webview — a preference should
 /// survive a cache clear and be a file the user can read or delete.
@@ -411,6 +435,11 @@ export const api = {
     }),
   getObject: (resource: GvkRef, namespace: string | null, name: string) =>
     invoke<ObjectDetail>("get_object", { resource, namespace, name }),
+
+  /// Everything connected to an object: what owns it, what it owns,
+  /// what selects it, and what it names in its own spec.
+  listRelated: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<RelatedObject[]>("list_related", { resource, namespace, name }),
 
   /// A listing with kubectl's own columns. Works for every kind,
   /// including CRDs, because the API server does the printing.

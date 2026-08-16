@@ -1,3 +1,6 @@
+// Cross-kind navigation is what the Related tab is for: from a
+// Deployment you reach its ReplicaSet, from there its Pods, and from a
+// Pod the ConfigMap it mounts. The listing stays where it was.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -15,6 +18,7 @@ vi.mock("../lib/api", async (original) => {
       listTable: vi.fn(),
       getObject: vi.fn(),
       listNamespaces: vi.fn(),
+      listRelated: vi.fn(),
     },
   };
 });
@@ -22,6 +26,7 @@ vi.mock("../lib/api", async (original) => {
 const listTable = vi.mocked(api.listTable);
 const getObject = vi.mocked(api.getObject);
 const listNamespaces = vi.mocked(api.listNamespaces);
+const listRelated = vi.mocked(api.listRelated);
 
 function kind(name: string): KindEntry {
   return {
@@ -74,6 +79,8 @@ beforeEach(() => {
   listTable.mockReset();
   getObject.mockReset();
   listNamespaces.mockReset();
+  listRelated.mockReset();
+  listRelated.mockResolvedValue([]);
 
   listTable.mockResolvedValue(table("mcp-hello"));
   listNamespaces.mockResolvedValue([]);
@@ -151,5 +158,65 @@ describe("KindBrowser", () => {
     expect(
       getObject.mock.calls.some(([resource]) => resource.kind === "Model"),
     ).toBe(false);
+  });
+
+  it("follows a related object into a different kind", async () => {
+    // The whole point of the Related tab. The listing stays on Agents;
+    // the detail view moves to the ConfigMap.
+    listRelated.mockResolvedValue([
+      {
+        relation: "uses",
+        group: "",
+        version: "v1",
+        kind: "ConfigMap",
+        name: "agent-config",
+        namespace: "agents",
+        reachable: true,
+        detail: "volume config",
+      },
+    ]);
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByText("mcp-hello"));
+    await waitFor(() => expect(getObject).toHaveBeenCalled());
+
+    await user.click(await screen.findByRole("button", { name: "Related" }));
+    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
+
+    await waitFor(() =>
+      expect(
+        getObject.mock.calls.some(([resource]) => resource.kind === "ConfigMap"),
+      ).toBe(true),
+    );
+  });
+
+  it("goes back to where it was followed from, not to the listing", async () => {
+    // Following a chain and then closing should retrace it, or the back
+    // button loses everything you navigated through.
+    listRelated.mockResolvedValue([
+      {
+        relation: "uses",
+        group: "",
+        version: "v1",
+        kind: "ConfigMap",
+        name: "agent-config",
+        namespace: "agents",
+        reachable: true,
+        detail: null,
+      },
+    ]);
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByText("mcp-hello"));
+    await user.click(await screen.findByRole("button", { name: "Related" }));
+    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
+    await screen.findByRole("button", { name: "Back to mcp-hello" });
+
+    await user.click(screen.getByRole("button", { name: "Back to mcp-hello" }));
+
+    // Back at the Agent, not at the Agents listing.
+    expect(
+      await screen.findByRole("button", { name: "Back to agent" }),
+    ).toBeInTheDocument();
   });
 });

@@ -12,8 +12,9 @@ import {
   Section,
 } from "../components/Field";
 import { DataView } from "../components/DataView";
+import { RelatedPanel } from "../components/RelatedPanel";
 import { hasDataTab } from "../lib/kinds";
-import { api, type GvkRef } from "../lib/api";
+import { api, type GvkRef, type RelatedObject } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
 
 // Detail for an object of a kind we know nothing about at compile time.
@@ -68,6 +69,10 @@ interface ObjectDetailProps {
   name: string;
   onClose: () => void;
   backTo?: string;
+  /// Opens another object from the Related tab. Without it the tab is a
+  /// list you cannot follow, which is most of the point gone, so the
+  /// tab is only offered when a caller can navigate.
+  onOpenRelated?: (related: RelatedObject) => void;
 }
 
 export function ObjectDetail({
@@ -76,6 +81,7 @@ export function ObjectDetail({
   name,
   onClose,
   backTo,
+  onOpenRelated,
 }: ObjectDetailProps) {
   const [tab, setTab] = useState("overview");
   const queryClient = useQueryClient();
@@ -97,6 +103,7 @@ export function ObjectDetail({
     { id: "overview", label: "Overview" },
     ...(dataKind && namespace ? [{ id: "data", label: "Data" }] : []),
     ...(namespace ? [{ id: "events", label: "Events" }] : []),
+    ...(onOpenRelated ? [{ id: "related", label: "Related" }] : []),
     { id: "yaml", label: "YAML" },
   ];
 
@@ -175,6 +182,13 @@ export function ObjectDetail({
 
       {tab === "events" && namespace && (
         <EventsTable namespace={namespace} name={name} />
+      )}
+
+      {tab === "related" && onOpenRelated && (
+        <RelatedPanel
+          target={{ resource, namespace, name }}
+          onOpen={onOpenRelated}
+        />
       )}
 
       {tab === "yaml" &&

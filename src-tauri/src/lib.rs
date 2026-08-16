@@ -213,6 +213,18 @@ async fn get_object(
     cluster::discovery::get_object(session.inner(), resource, namespace, &name).await
 }
 
+/// Everything connected to one object: what owns it, what it owns, what
+/// selects it, and what it names.
+#[tauri::command]
+async fn list_related(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<Vec<cluster::related::RelatedObject>> {
+    cluster::related::related(session.inner(), resource, namespace, &name).await
+}
+
 /// Writes an edited object back, as a full replace.
 ///
 /// The target is carried alongside the text so the apply can refuse an
@@ -389,6 +401,7 @@ pub fn run() {
             get_object,
             get_config_map_data,
             get_secret_data,
+            list_related,
             apply_yaml,
             list_helm_releases,
             get_helm_release,
