@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useXTerm } from "react-xtermjs";
 import { FitAddon } from "@xterm/addon-fit";
+// Imported here, not left to react-xtermjs. Its *type declaration* says
+// it imports this, but its compiled JS does not — so trusting the
+// declaration ships a bundle with all of xterm's JavaScript and none of
+// its CSS, and the terminal renders as an unstyled div: present,
+// running, and plainly not a terminal. Nothing in jsdom can see this,
+// which is why there is a test asserting the import itself.
+import "@xterm/xterm/css/xterm.css";
 import {
   Channel,
   api,

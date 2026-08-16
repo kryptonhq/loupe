@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// `?raw` rather than node:fs — Vite resolves it, so this needs no Node
+// type definitions and works the same way the app's own imports do.
+import terminalSource from "./Terminal.tsx?raw";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { Terminal } from "./Terminal";
 import { ClusterContext } from "../lib/clusterContext";
@@ -68,6 +71,8 @@ vi.mock("react-xtermjs", () => ({
     return { ref: mountRef, instance };
   },
 }));
+
+vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
@@ -363,6 +368,17 @@ describe("Terminal", () => {
 
     expect(await screen.findByText("/bin/sh")).toBeInTheDocument();
     expect(screen.queryByText("opening a shell…")).not.toBeInTheDocument();
+  });
+
+  it("imports xterm's stylesheet itself", () => {
+    // Regression, and a build-shape check rather than a behavioural one
+    // — jsdom applies no stylesheet, so nothing else here can see this.
+    //
+    // react-xtermjs's *type declaration* imports xterm.css; its compiled
+    // JS does not. Trusting the declaration shipped a bundle with all of
+    // xterm's JavaScript and none of its CSS, so the terminal rendered
+    // as an unstyled div: present, running, and plainly not a terminal.
+    expect(terminalSource).toContain("@xterm/xterm/css/xterm.css");
   });
 
   it("does not offer a shell in an init container", async () => {
