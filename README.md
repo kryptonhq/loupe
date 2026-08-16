@@ -61,11 +61,34 @@ require Krypton Runtime to be installed.
   manifest, notes and revision history, with no `helm` binary needed
 - Editing: the YAML tab writes back as a full replace, so an object
   someone else changed underneath you is rejected rather than silently
-  overwritten. Deleting is deliberately not implemented yet
+  overwritten — and every apply shows a diff first, with the fields the
+  server manages stripped out and the ones that carry weight marked
+- Scale, rollout restart, delete, cordon and drain. Every one confirms,
+  naming the cluster before the object, and an action your RBAC forbids
+  is absent rather than failing
+- Per-context safeguards: mark a cluster read-only and writes are
+  refused, or protected and each one has to be confirmed by typing the
+  context name. Enforced in Rust, not just hidden in the UI. This is not
+  RBAC — it is the client-side equivalent of a red border round the
+  production window
+- A shell in any container, and port forwards that survive a rollout —
+  the target pod is resolved per connection, so a forward aimed at a
+  Service keeps working while its pods are replaced
+- Related-object navigation: from a pod, the ReplicaSet that made it,
+  the Deployment above that, the Service that selects it, and the
+  ConfigMaps it mounts, each one click away
 - Light, dark, or follow-the-system appearance, remembered in
   `settings.json` beside the app's other config
 - Pod logs, streamed live — with container selection, timestamps, and
-  `previous` for reading why a crashed container died
+  `previous` for reading why a crashed container died. Filter them with
+  a substring or a regex, exclude the noise, keep `grep -C` context, and
+  copy or save what is on screen with a header recording what it was
+  filtered through
+- Or log a whole workload: every replica of a Deployment merged into one
+  view, colour-coded by pod, following pods as a rollout replaces them —
+  `stern` without the second tool
+- A command palette on ⌘K over every kind, custom resource, context and
+  action, so a session can run without the mouse
 
 <p align="center">
   <img src="docs/screenshots/services.png" width="820" alt="Service list with the columns kubectl get prints" />
@@ -91,6 +114,30 @@ require Krypton Runtime to be installed.
 <p align="center">
   <img src="docs/screenshots/pod-yaml.png" width="820" alt="Pod manifest with syntax highlighting" />
 </p>
+
+## Scale
+
+Loupe is built for the kubeconfig and the cluster people actually have,
+not the demo ones:
+
+- **A kubeconfig with thousands of contexts** opens instantly. Search
+  text is built once rather than per keystroke, only the rows on screen
+  are in the DOM, and results are ranked — so typing a cluster's full
+  name puts it first rather than thirtieth. Recents and pins sit above
+  everything, because on six thousand contexts about four are the ones
+  anyone opens.
+- **Listings are paged and watched.** A page is fetched at a time, so
+  time to first row follows the page size rather than the size of the
+  cluster, and freshness comes from a watch rather than a ten-second
+  timer — one LIST and then deltas, which is both cheaper for the API
+  server and faster to notice a change. When a listing holds only part
+  of a namespace, it says so rather than implying a search covered
+  everything.
+- **Logs keep up with chatty pods.** Lines are batched on the Rust side,
+  coalesced onto animation frames, and only the visible ones are in the
+  DOM, so a pod emitting thousands of lines a second does not stutter.
+- **Several clusters stay connected**, so switching back to one
+  re-authenticates nothing and re-walks no API discovery.
 
 ## Security model
 
@@ -179,14 +226,19 @@ is dev-only and is stripped from production builds.
 
 ```
 src/                     React + TypeScript frontend
-  components/            Shared UI (Table, Chip, LogViewer, YamlView)
+  components/            Shared UI (Table, LogViewer, Terminal, palette)
   lib/api.ts             Typed wrappers over the Tauri commands
   lib/highlight.ts       YAML tokenizer for the manifest view
+  lib/logBuffer.ts       Ring buffer behind the log viewer
+  lib/useWatch.ts        Keeps a listing fresh from a watch
+  lib/yamlDiff.ts        The diff shown before an apply
   pages/                 Context picker, resource lists, detail views
 src-tauri/
   src/lib.rs             Tauri command surface
-  src/cluster/           kubeconfig, session, resources, detail, logs,
-                         discovery, server-side printing, helm, edit
+  src/cluster/           kubeconfig, session pool, resources, detail,
+                         logs, exec, port-forward, watch, discovery,
+                         server-side printing, helm, edit, actions
+  src/guard.rs           Per-context read-only and protected marks
   src/error.rs           Error type shared across the IPC boundary
 ```
 
