@@ -78,8 +78,8 @@ beforeEach(() => {
   });
 
   currentCluster.mockResolvedValue(CLUSTER);
-  getSettings.mockResolvedValue({ theme: "system" });
-  setTheme.mockResolvedValue({ theme: "dark" });
+  getSettings.mockResolvedValue({ theme: "system", recentContexts: [], pinnedContexts: [] });
+  setTheme.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [] });
   disconnect.mockResolvedValue(undefined);
   listContexts.mockResolvedValue([
     {
@@ -215,7 +215,7 @@ describe("App theme", () => {
   });
 
   it("honours a stored preference on launch", async () => {
-    getSettings.mockResolvedValue({ theme: "dark" });
+    getSettings.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [] });
     renderApp();
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
   });

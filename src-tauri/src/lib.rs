@@ -22,8 +22,37 @@ fn list_contexts() -> Result<Vec<ContextInfo>> {
 }
 
 #[tauri::command]
-async fn connect(session: tauri::State<'_, SharedSession>, context: String) -> Result<ClusterInfo> {
-    cluster::connect(session.inner(), &context).await
+async fn connect(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    context: String,
+) -> Result<ClusterInfo> {
+    let info = cluster::connect(session.inner(), &context).await?;
+
+    // Recorded only on success: a context that could not be reached is
+    // not one the user was working with, and putting it at the top of
+    // the shortlist would be actively unhelpful.
+    //
+    // A failure to persist is not a reason to fail the connection —
+    // the user is connected either way.
+    let mut settings = settings::load(&app);
+    settings.record_recent(&context);
+    let _ = settings::save(&app, &settings);
+
+    Ok(info)
+}
+
+/// Pins or unpins a context, returning the settings as stored.
+#[tauri::command]
+fn set_context_pinned(
+    app: tauri::AppHandle,
+    context: String,
+    pinned: bool,
+) -> Result<settings::Settings> {
+    let mut settings = settings::load(&app);
+    settings.set_pinned(&context, pinned);
+    settings::save(&app, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -331,6 +360,7 @@ pub fn run() {
             save_text,
             get_settings,
             set_theme,
+            set_context_pinned,
             vibrancy_enabled,
         ])
         .run(tauri::generate_context!())

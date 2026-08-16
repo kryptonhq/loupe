@@ -13,7 +13,13 @@ vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
   return {
     ...actual,
-    api: { ...actual.api, listContexts: vi.fn(), connect: vi.fn() },
+    api: {
+      ...actual.api,
+      listContexts: vi.fn(),
+      connect: vi.fn(),
+      getSettings: vi.fn(),
+      setContextPinned: vi.fn(),
+    },
   };
 });
 
@@ -23,6 +29,12 @@ vi.mock("../lib/window", () => ({
 
 const listContexts = vi.mocked(api.listContexts);
 const connect = vi.mocked(api.connect);
+const getSettings = vi.mocked(api.getSettings);
+const setContextPinned = vi.mocked(api.setContextPinned);
+
+function settings(over: Partial<import("../lib/api").Settings> = {}) {
+  return { theme: "system" as const, recentContexts: [], pinnedContexts: [], ...over };
+}
 
 function context(name: string, overrides: Partial<ContextInfo> = {}): ContextInfo {
   return {
@@ -44,6 +56,12 @@ function renderPicker(props: Partial<Parameters<typeof ContextPicker>[0]> = {}) 
 beforeEach(() => {
   listContexts.mockReset();
   connect.mockReset();
+  getSettings.mockReset();
+  setContextPinned.mockReset();
+  getSettings.mockResolvedValue(settings());
+  setContextPinned.mockImplementation(async (context, pinned) =>
+    settings({ pinnedContexts: pinned ? [context] : [] }),
+  );
 
   listContexts.mockResolvedValue([
     context("prod", { namespace: "payments" }),
@@ -204,5 +222,166 @@ describe("ContextPicker", () => {
       expect(screen.getByText("Connecting…")).toBeInTheDocument(),
     );
     expect(screen.getByText("staging").closest("button")).toBeDisabled();
+  });
+
+  // Scale. A kubeconfig with thousands of contexts is ordinary in a
+  // large org, and the picker is the first screen — if it stutters
+  // there, nothing after it gets evaluated.
+
+  it("renders only the rows on screen for a huge kubeconfig", async () => {
+    // 6,000 contexts as 6,000 buttons is the thing being prevented: the
+    // browser lays out every one of them before first paint.
+    listContexts.mockResolvedValue(
+      Array.from({ length: 6000 }, (_, i) => context(`cluster-${i}`)),
+    );
+
+    renderPicker();
+    await screen.findByText("cluster-0");
+
+    const rendered = screen.getAllByRole("button", { name: /^Pin cluster-/ });
+    expect(rendered.length).toBeLessThan(100);
+  });
+
+  it("stays interactive while typing against thousands of contexts", async () => {
+    listContexts.mockResolvedValue(
+      Array.from({ length: 6000 }, (_, i) => context(`cluster-${i}`)),
+    );
+
+    const { user } = renderPicker();
+    await screen.findByText("cluster-0");
+
+    await user.type(screen.getByLabelText("Filter contexts"), "cluster-4242");
+    expect(await screen.findByText("cluster-4242")).toBeInTheDocument();
+  });
+
+  it("ranks an exact match first rather than burying it", async () => {
+    // The specific failure that makes a long list feel broken: typing a
+    // cluster's full name and finding it thirtieth.
+    listContexts.mockResolvedValue([
+      context("prod-eu"),
+      context("prod-us"),
+      context("prod"),
+      // Padding, so the list is long enough to be given a filter box.
+      ...Array.from({ length: 6 }, (_, i) => context(`other-${i}`)),
+    ]);
+
+    const { user } = renderPicker();
+    await screen.findByText("prod-eu");
+    await user.type(screen.getByLabelText("Filter contexts"), "prod");
+
+    const names = screen
+      .getAllByRole("button", { name: /^Pin / })
+      .map((b) => b.getAttribute("aria-label")?.replace("Pin ", ""));
+    expect(names[0]).toBe("prod");
+  });
+
+  it("puts recently used contexts above the rest", async () => {
+    // On six thousand contexts, four names are the ones anyone opens.
+    listContexts.mockResolvedValue([
+      context("a"),
+      context("b"),
+      context("zeta"),
+    ]);
+    getSettings.mockResolvedValue(settings({ recentContexts: ["zeta"] }));
+
+    renderPicker();
+    expect(await screen.findByText("Recent")).toBeInTheDocument();
+
+    const names = screen
+      .getAllByRole("button", { name: /^Pin / })
+      .map((b) => b.getAttribute("aria-label")?.replace("Pin ", ""));
+    expect(names[0]).toBe("zeta");
+  });
+
+  it("puts pinned contexts above recents", async () => {
+    listContexts.mockResolvedValue([context("a"), context("b"), context("c")]);
+    getSettings.mockResolvedValue(
+      settings({ recentContexts: ["b"], pinnedContexts: ["c"] }),
+    );
+
+    renderPicker();
+    await screen.findByText("Pinned");
+
+    const names = screen
+      .getAllByRole("button", { name: /^(Pin|Unpin) / })
+      .map((b) => b.getAttribute("aria-label")?.replace(/^(Pin|Unpin) /, ""));
+    expect(names.slice(0, 2)).toEqual(["c", "b"]);
+  });
+
+  it("pins a context and remembers it", async () => {
+    listContexts.mockResolvedValue([context("prod"), context("dev")]);
+
+    const { user } = renderPicker();
+    await screen.findByText("prod");
+
+    await user.click(screen.getByRole("button", { name: "Pin prod" }));
+
+    await waitFor(() => expect(setContextPinned).toHaveBeenCalledWith("prod", true));
+    expect(await screen.findByText("Pinned")).toBeInTheDocument();
+  });
+
+  it("unpins a context that was pinned", async () => {
+    listContexts.mockResolvedValue([context("prod")]);
+    getSettings.mockResolvedValue(settings({ pinnedContexts: ["prod"] }));
+    setContextPinned.mockResolvedValue(settings());
+
+    const { user } = renderPicker();
+    await screen.findByRole("button", { name: "Unpin prod" });
+
+    await user.click(screen.getByRole("button", { name: "Unpin prod" }));
+    await waitFor(() => expect(setContextPinned).toHaveBeenCalledWith("prod", false));
+  });
+
+  it("puts a pin back when it could not be saved", async () => {
+    // A pin that silently does not survive the next launch is worse than
+    // one that visibly failed.
+    listContexts.mockResolvedValue([context("prod")]);
+    setContextPinned.mockRejectedValue({ kind: "settings", message: "read-only" });
+
+    const { user } = renderPicker();
+    await screen.findByText("prod");
+
+    await user.click(screen.getByRole("button", { name: "Pin prod" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Pin prod" })).toBeInTheDocument(),
+    );
+  });
+
+  it("does not list a pinned context twice", async () => {
+    // Pinned and recent are the same context here; showing it in both
+    // groups makes clicking one of them look broken.
+    listContexts.mockResolvedValue([context("prod"), context("dev")]);
+    getSettings.mockResolvedValue(
+      settings({ recentContexts: ["prod"], pinnedContexts: ["prod"] }),
+    );
+
+    renderPicker();
+    await screen.findByText("Pinned");
+
+    expect(screen.getAllByRole("button", { name: /^Unpin prod$/ })).toHaveLength(1);
+    expect(screen.queryByText("Recent")).not.toBeInTheDocument();
+  });
+
+  it("ignores a remembered context that is no longer in the kubeconfig", async () => {
+    // Contexts get removed. A stale recent must not produce a row that
+    // cannot be connected to.
+    listContexts.mockResolvedValue([context("prod")]);
+    getSettings.mockResolvedValue(
+      settings({ recentContexts: ["deleted"], pinnedContexts: ["also-deleted"] }),
+    );
+
+    renderPicker();
+    await screen.findByText("prod");
+
+    expect(screen.queryByText("deleted")).not.toBeInTheDocument();
+    expect(screen.queryByText("also-deleted")).not.toBeInTheDocument();
+  });
+
+  it("still lists contexts when preferences cannot be read", async () => {
+    // Recents are a convenience; losing them must not lose the picker.
+    getSettings.mockRejectedValue({ kind: "settings", message: "no config dir" });
+
+    renderPicker();
+    expect(await screen.findByText("prod")).toBeInTheDocument();
   });
 });

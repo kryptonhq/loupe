@@ -273,6 +273,11 @@ export interface ObjectDetail extends Editable {
 /// survive a cache clear and be a file the user can read or delete.
 export interface Settings {
   theme: Theme;
+  /// Contexts connected to, most recent first. Recorded by the backend
+  /// on a successful connect.
+  recentContexts: string[];
+  /// Contexts the user pinned, in their own order.
+  pinnedContexts: string[];
 }
 
 /// Identifies the object an editor is open on. Sent back with the edit
@@ -445,6 +450,10 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setTheme: (theme: Theme) => invoke<Settings>("set_theme", { theme }),
+  /// Pins or unpins a context in the picker, returning the settings as
+  /// stored.
+  setContextPinned: (context: string, pinned: boolean) =>
+    invoke<Settings>("set_context_pinned", { context, pinned }),
 
   /// Whether native window vibrancy actually took effect. Asked rather
   /// than inferred from the platform: support depends on OS build and,
