@@ -12,6 +12,7 @@ pub mod data;
 pub mod detail;
 pub mod discovery;
 pub mod edit;
+pub mod exec;
 pub mod helm;
 pub mod logs;
 pub mod related;

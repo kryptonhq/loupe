@@ -23,11 +23,19 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Pinned to 4.0 rather than 4.2 because of "ws", which exec and
+# port-forward are built on — both are websocket-upgraded connections
+# rather than ordinary requests. kube 4.2's ws feature requires
+# tokio-tungstenite 0.29, which in turn requires tungstenite 0.29 — a
+# version that was never published (0.28 is followed by 0.30), so the
+# feature cannot resolve at all. 4.0 has the same API surface this app
+# uses and a ws feature that builds. Worth revisiting once upstream
+# republishes.
 # rustls-tls avoids linking OpenSSL. "ring" is not optional alongside it:
 # rustls 0.23 refuses to pick a crypto provider on its own, and without
 # exactly one enabled the first connect panics with "Could not
 # automatically determine the process-level CryptoProvider".
-kube = { version = "4.2.0", default-features = false, features = ["client", "config", "runtime", "derive", "rustls-tls", "ring"] }
+kube = { version = "4.0.0", default-features = false, features = ["client", "config", "runtime", "derive", "rustls-tls", "ring", "ws"] }
 # The v1_XX feature pins which API surface is compiled in, not which
 # clusters can be reached — the client stays compatible across versions.
 k8s-openapi = { version = "0.28.0", default-features = false, features = ["v1_33"] }

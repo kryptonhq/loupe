@@ -6,6 +6,7 @@ import { Chip } from "../components/Chip";
 import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
 import { ObjectActions } from "../components/ObjectActions";
+import { Terminal } from "../components/Terminal";
 import { EventsTable } from "../components/EventsTable";
 import { Field, PairChips, Section } from "../components/Field";
 import { SkeletonBlock } from "../components/Skeleton";
@@ -14,6 +15,9 @@ import { api, type ContainerView } from "../lib/api";
 const TABS: TabSpec[] = [
   { id: "overview", label: "Overview" },
   { id: "logs", label: "Logs" },
+  // The point where the app used to stop being sufficient: you could
+  // see why a pod failed and then had to leave to run one command in it.
+  { id: "shell", label: "Shell" },
   { id: "events", label: "Events" },
   { id: "yaml", label: "YAML" },
 ];
@@ -151,6 +155,21 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
             namespace={namespace}
             pod={name}
             containers={[...pod.initContainers, ...pod.containers]}
+          />
+        ) : (
+          <div className="px-4 py-4">
+            <SkeletonBlock className="h-64 w-full" />
+          </div>
+        ))}
+
+      {tab === "shell" &&
+        (pod ? (
+          <Terminal
+            namespace={namespace}
+            pod={name}
+            // Init containers have already exited; a shell in one is not
+            // a thing that can be opened.
+            containers={pod.containers}
           />
         ) : (
           <div className="px-4 py-4">

@@ -67,6 +67,9 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // leaving. Dropping the session alone would leave them running
     // against a cluster the user believes they disconnected from.
     log_streams().cancel_all().await;
+    // A terminal left open is a connection to the cluster the user
+    // believes they left, and a process still running in a container.
+    exec_sessions().close_all().await;
     session.inner().clear().await;
     Ok(())
 }
@@ -407,6 +410,49 @@ async fn save_text(
     Ok(saved.map(|p| p.display().to_string()))
 }
 
+/// Opens a shell in a container. Output arrives on `channel`.
+///
+/// The most privileged thing this app can do, and the one place the
+/// "Rust owns every connection" rule matters most — the webview sends
+/// keystrokes and receives bytes, never a connection of its own.
+#[tauri::command]
+async fn start_exec(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    options: cluster::exec::ExecOptions,
+    channel: tauri::ipc::Channel<cluster::exec::ExecEvent>,
+) -> Result<u64> {
+    // A shell is a write, whatever it is used for. A context marked
+    // read-only should not hand out one.
+    guard_writes(&app, session.inner()).await?;
+    cluster::exec::start(session.inner(), exec_sessions(), options, channel).await
+}
+
+#[tauri::command]
+async fn write_exec(id: u64, data: String) -> Result<()> {
+    exec_sessions().write(id, &data).await
+}
+
+/// Propagates the window size to the remote TTY, so full-screen programs
+/// in the container draw at the size the user can actually see.
+#[tauri::command]
+async fn resize_exec(id: u64, width: u16, height: u16) -> Result<()> {
+    exec_sessions().resize(id, width, height).await
+}
+
+/// Closes a session. False means it had already ended by itself.
+#[tauri::command]
+async fn close_exec(id: u64) -> Result<bool> {
+    Ok(exec_sessions().close(id).await)
+}
+
+/// Open terminals, for the same reason the log registry exists: the
+/// handles must outlive the command that created them.
+fn exec_sessions() -> &'static cluster::exec::ExecSessions {
+    static SESSIONS: std::sync::OnceLock<cluster::exec::ExecSessions> = std::sync::OnceLock::new();
+    SESSIONS.get_or_init(cluster::exec::ExecSessions::default)
+}
+
 /// The stream registry outlives any single command, and abort handles
 /// must stay reachable to cancel a followed stream, so it is a process
 /// singleton rather than Tauri-managed state.
@@ -497,6 +543,10 @@ pub fn run() {
             start_pod_logs,
             start_merged_logs,
             stop_pod_logs,
+            start_exec,
+            write_exec,
+            resize_exec,
+            close_exec,
             save_text,
             get_settings,
             set_theme,

@@ -429,6 +429,22 @@ export interface MergedLogOptions {
   timestamps: boolean;
 }
 
+/// Output from a running exec session.
+export type ExecEvent =
+  | { kind: "output"; data: string }
+  /// Which shell was actually opened, after the probe.
+  | { kind: "started"; shell: string }
+  | { kind: "ended" }
+  | { kind: "failed"; message: string };
+
+export interface ExecOptions {
+  namespace: string;
+  pod: string;
+  container?: string | null;
+  /// Overrides the automatic bash-then-sh probe.
+  shell?: string | null;
+}
+
 /// Progress from a node drain. Per-pod because a drain is a sequence of
 /// independent evictions, several of which are expected to be skipped
 /// and any of which may be refused by a PodDisruptionBudget.
@@ -558,6 +574,17 @@ export const api = {
   /// Deployment's logs are the interleaved logs of its replicas.
   startMergedLogs: (options: MergedLogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_merged_logs", { options, channel }),
+
+  /// Opens a shell in a container. Output arrives on `channel`.
+  startExec: (options: ExecOptions, channel: Channel<ExecEvent>) =>
+    invoke<number>("start_exec", { options, channel }),
+  writeExec: (id: number, data: string) =>
+    invoke<void>("write_exec", { id, data }),
+  /// Propagates the window size, so full-screen programs in the
+  /// container draw at the size the user can see.
+  resizeExec: (id: number, width: number, height: number) =>
+    invoke<void>("resize_exec", { id, width, height }),
+  closeExec: (id: number) => invoke<boolean>("close_exec", { id }),
 
   /// Writes text to a file the user picks. Resolves with the path
   /// written, or null if they cancelled — an ordinary outcome, not an
