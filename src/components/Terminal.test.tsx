@@ -1,13 +1,53 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { Terminal, stripAnsi } from "./Terminal";
+import { Terminal } from "./Terminal";
 import { ClusterContext } from "../lib/clusterContext";
 import { api, type ContainerView, type ExecEvent, type Guard } from "../lib/api";
 
 // A shell is the most privileged thing this app opens, so most of what
 // is asserted here is about closing one: a leaked session is a leaked
 // connection *and* a process still running in somebody's container.
+//
+// The emulator itself is xterm's problem, not ours. What is ours is the
+// wiring — every keystroke reaching Rust as raw bytes, every byte coming
+// back untouched, and the size staying in step — so xterm is stubbed and
+// those four things are checked directly.
+
+const written: string[] = [];
+let onData: ((data: string) => void) | null = null;
+const cleared = { count: 0 };
+
+/// Stands in for the emulator. The emulator is xterm's problem; what is
+/// ours is the wiring — keystrokes reaching Rust as raw bytes, bytes
+/// coming back untouched, and the size staying in step.
+const instance = {
+  cols: 80,
+  rows: 24,
+  write: (data: string) => written.push(data),
+  focus: vi.fn(),
+  clear: () => {
+    cleared.count += 1;
+  },
+};
+
+/// Stable across renders, the way a real ref is. Handing back a fresh
+/// object each render would restart the session on every render, which
+/// is a fault in the harness rather than in the component — but it is
+/// also exactly what the component must not be sensitive to.
+const mountRef = { current: null as HTMLDivElement | null };
+
+vi.mock("react-xtermjs", () => ({
+  useXTerm: ({ listeners }: { listeners?: { onData?: (d: string) => void } }) => {
+    onData = listeners?.onData ?? null;
+    return { ref: mountRef, instance };
+  },
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit = vi.fn();
+  },
+}));
 
 vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
@@ -28,6 +68,7 @@ vi.mock("../lib/api", async (original) => {
 
 const startExec = vi.mocked(api.startExec);
 const writeExec = vi.mocked(api.writeExec);
+const resizeExec = vi.mocked(api.resizeExec);
 const closeExec = vi.mocked(api.closeExec);
 
 let channels: { onmessage?: (e: ExecEvent) => void }[] = [];
@@ -52,7 +93,7 @@ function setup({
       <Terminal namespace="payments" pod="api-7d9" containers={containers} />
     </ClusterContext.Provider>,
   );
-  return { user: userEvent.setup(), unmount: view.unmount };
+  return { unmount: view.unmount };
 }
 
 function emit(event: ExecEvent) {
@@ -61,10 +102,21 @@ function emit(event: ExecEvent) {
   });
 }
 
+/// What the user's keyboard would produce, delivered the way xterm
+/// delivers it: raw bytes, not a line.
+function type(data: string) {
+  act(() => onData?.(data));
+}
+
 beforeEach(() => {
   channels = [];
+  written.length = 0;
+  cleared.count = 0;
+  onData = null;
+
   startExec.mockReset();
   writeExec.mockReset();
+  resizeExec.mockReset();
   closeExec.mockReset();
 
   let nextId = 1;
@@ -73,7 +125,7 @@ beforeEach(() => {
     return nextId++;
   });
   writeExec.mockResolvedValue(undefined);
-  vi.mocked(api.resizeExec).mockResolvedValue(undefined);
+  resizeExec.mockResolvedValue(undefined);
   closeExec.mockResolvedValue(true);
 });
 
@@ -100,72 +152,97 @@ describe("Terminal", () => {
     expect(await screen.findByText("/bin/sh")).toBeInTheDocument();
   });
 
-  it("shows the output the shell produces", async () => {
+  it("writes output through untouched", async () => {
+    // Including the escape sequences. Interpreting them is the whole
+    // reason this is an emulator rather than a text box — the version
+    // that stripped them by hand mangled ordinary output instead.
     setup();
     await waitFor(() => expect(startExec).toHaveBeenCalled());
 
     emit({ kind: "started", shell: "/bin/sh" });
-    emit({ kind: "output", data: "total 0\ndrwxr-xr-x app\n" });
+    emit({ kind: "output", data: "[31merror[0m [INFO] done]\r\n" });
 
-    expect(await screen.findByText(/drwxr-xr-x app/)).toBeInTheDocument();
+    expect(written).toContain("[31merror[0m [INFO] done]\r\n");
   });
 
-  it("sends what is typed, with a newline", async () => {
-    const { user } = setup();
+  it("sends a keystroke the moment it is typed", async () => {
+    // Not on Enter. A shell needs the bytes as they happen, which is
+    // what makes tab completion and Ctrl-R work at all.
+    setup();
     await waitFor(() => expect(startExec).toHaveBeenCalled());
     emit({ kind: "started", shell: "/bin/sh" });
 
-    await user.type(await screen.findByLabelText("Terminal input"), "ls -la");
-    await user.keyboard("{Enter}");
-
-    await waitFor(() => expect(writeExec).toHaveBeenCalledWith(1, "ls -la\n"));
+    type("l");
+    await waitFor(() => expect(writeExec).toHaveBeenCalledWith(1, "l"));
   });
 
-  it("clears the input once a command is sent", async () => {
-    const { user } = setup();
+  it("sends control sequences the old input box could not", async () => {
+    setup();
     await waitFor(() => expect(startExec).toHaveBeenCalled());
     emit({ kind: "started", shell: "/bin/sh" });
 
-    const field = await screen.findByLabelText("Terminal input");
-    await user.type(field, "whoami");
-    await user.keyboard("{Enter}");
+    // Ctrl-C, Tab, and an arrow key: none of these are "a line of text".
+    type("");
+    type("\t");
+    type("[A");
 
-    expect(field).toHaveValue("");
+    const sent = writeExec.mock.calls.map(([, data]) => data);
+    expect(sent).toEqual(["", "\t", "[A"]);
   });
 
-  it("sends an interrupt on Ctrl-C rather than copying", async () => {
-    // There is nothing else Ctrl-C can usefully mean in a terminal.
-    const { user } = setup();
+  it("tells the remote TTY how big the window is", async () => {
+    // Without this, everything full-screen in the container draws for
+    // 80x24 whatever the pane is.
+    setup();
     await waitFor(() => expect(startExec).toHaveBeenCalled());
     emit({ kind: "started", shell: "/bin/sh" });
 
-    // Focused first: the binding is on the input, not on the window,
-    // so Ctrl-C elsewhere in the app still copies.
-    await user.click(await screen.findByLabelText("Terminal input"));
-    await user.keyboard("{Control>}c{/Control}");
-
-    await waitFor(() => expect(writeExec).toHaveBeenCalledWith(1, ""));
+    await waitFor(() => expect(resizeExec).toHaveBeenCalled());
+    const [id, cols, rows] =
+      resizeExec.mock.calls[resizeExec.mock.calls.length - 1];
+    expect(id).toBe(1);
+    expect(cols).toBeGreaterThan(0);
+    expect(rows).toBeGreaterThan(0);
   });
 
-  it("closes the session when the tab goes away", async () => {
+  it("does not send keystrokes before the session exists", async () => {
+    // xterm is live as soon as it is mounted, and a keystroke landing
+    // before the id arrives would be written to the wrong session or
+    // throw.
+    // Never resolves, so the session id never arrives.
+    startExec.mockReturnValue(new Promise(() => {}));
+
+    setup();
+    await waitFor(() => expect(onData).not.toBeNull());
+
+    type("x");
+    expect(writeExec).not.toHaveBeenCalled();
+  });
+
+  it("closes the session and the terminal when the tab goes away", async () => {
     // The leak that matters: a process still running in a container.
     const { unmount } = setup();
     await waitFor(() => expect(startExec).toHaveBeenCalled());
 
     unmount();
     await waitFor(() => expect(closeExec).toHaveBeenCalledWith(1));
+    // Cleared too, so one container's output cannot appear under the
+    // next one's name.
+    expect(cleared.count).toBe(1);
   });
 
   it("closes the old session before opening a new one", async () => {
-    const { user } = setup({
-      containers: [container("app"), container("sidecar")],
-    });
+    setup({ containers: [container("app"), container("sidecar")] });
     await waitFor(() => expect(startExec).toHaveBeenCalledTimes(1));
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Container" }),
-      "sidecar",
-    );
+    const picker = screen.getByRole("combobox", { name: "Container" });
+    act(() => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLSelectElement.prototype,
+        "value",
+      )!.set!.call(picker, "sidecar");
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    });
 
     await waitFor(() => expect(startExec).toHaveBeenCalledTimes(2));
     expect(closeExec).toHaveBeenCalledWith(1);
@@ -176,11 +253,11 @@ describe("Terminal", () => {
     startExec.mockRejectedValue({
       kind: "kubernetes",
       message:
-        "/bin/bash is not in this image. Distroless and scratch images ship no shell at all",
+        "No shell in this image (tried /bin/bash, /bin/sh, /busybox/sh). Distroless and scratch images ship none",
     });
 
     setup();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Distroless");
+    expect(await screen.findByRole("alert")).toHaveTextContent("No shell in this image");
   });
 
   it("surfaces an RBAC denial", async () => {
@@ -201,14 +278,15 @@ describe("Terminal", () => {
     emit({ kind: "ended" });
 
     expect(await screen.findByText("closed")).toBeInTheDocument();
-    expect(screen.getByLabelText("Terminal input")).toBeDisabled();
+    // And says so in the terminal too, where the user is looking.
+    expect(written.join("")).toContain("process exited");
   });
 
   it("offers no terminal at all on a read-only context", () => {
     // A shell is a write however it is used.
     setup({ guard: "readOnly" });
 
-    expect(screen.queryByLabelText("Terminal input")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("terminal")).not.toBeInTheDocument();
     expect(screen.getByText(/read-only/)).toBeInTheDocument();
     expect(startExec).not.toHaveBeenCalled();
   });
@@ -217,42 +295,8 @@ describe("Terminal", () => {
     // They have already exited; there is nothing to exec into.
     setup({ containers: [container("app")] });
     await waitFor(() => expect(startExec).toHaveBeenCalled());
-    expect(screen.queryByRole("combobox", { name: "Container" })).not.toBeInTheDocument();
-  });
-});
-
-describe("stripAnsi", () => {
-  it("removes colour sequences", () => {
-    // Left in, they render as visible gibberish; interpreting them
-    // properly means an emulator, which is a much bigger thing.
-    expect(stripAnsi("[31merror[0m")).toBe("error");
-  });
-
-  it("removes cursor movement", () => {
-    expect(stripAnsi("a[2Kb")).toBe("ab");
-  });
-
-  it("removes a window title sequence", () => {
-    expect(stripAnsi("]0;titlels")).toBe("ls");
-  });
-
-  it("turns a bare carriage return into a line break", () => {
-    // A progress bar redrawing in place. Without an emulator, a break is
-    // the least-wrong thing to do with it.
-    expect(stripAnsi("50%\r100%")).toBe("50%\n100%");
-  });
-
-  it("does not double up a CRLF", () => {
-    expect(stripAnsi("one\r\ntwo")).toBe("one\ntwo");
-  });
-
-  it("leaves ordinary text alone", () => {
-    expect(stripAnsi("total 0\ndrwxr-xr-x  2 root root")).toBe(
-      "total 0\ndrwxr-xr-x  2 root root",
-    );
-  });
-
-  it("leaves an empty string empty", () => {
-    expect(stripAnsi("")).toBe("");
+    expect(
+      screen.queryByRole("combobox", { name: "Container" }),
+    ).not.toBeInTheDocument();
   });
 });

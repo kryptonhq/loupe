@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useXTerm } from "react-xtermjs";
+import { FitAddon } from "@xterm/addon-fit";
 import {
   Channel,
   api,
@@ -9,50 +11,29 @@ import {
 import { Select } from "./Select";
 import { useCluster } from "../lib/clusterContext";
 
-// A shell in a container.
+// A shell inside a container.
 //
-// Deliberately a small terminal rather than a full emulator. Loupe does
-// not bundle xterm.js: it is a large dependency whose value is ANSI
-// rendering, and the honest position is that this is a place to run
-// `ls`, `cat` and `curl` — not to run vim. So escape sequences are
-// stripped rather than interpreted, and the view says as much, which is
-// better than rendering them as mojibake and pretending.
+// This is a real terminal emulator, not a text box that sends lines. The
+// first version was the latter — a <pre> for output and an <input> that
+// posted on Enter — and it could not work: no arrow keys, no tab
+// completion, no Ctrl-R, no `less`, and every escape sequence had to be
+// stripped by hand because there was nothing to interpret them. Doing
+// that by hand went wrong in the obvious way, and the result was output
+// that looked mangled and typing that looked ignored.
 //
-// Everything the user types goes straight to the remote shell. Output
-// arrives on a channel; the webview never holds the connection.
+// xterm.js is a large dependency and the right one: the escape sequences
+// exist for it, and a terminal that cannot interpret them is not a
+// terminal. `useXTerm` owns the mount and dispose lifecycle, which is
+// the part that is easy to get subtly wrong.
+//
+// The division of labour is unchanged and is the part that matters:
+// every keystroke goes to Rust as raw bytes and every byte comes back
+// the same way. The webview holds no connection to the API server.
 
-/// Approximate character cell size, used to tell the remote TTY how big
-/// the window is. Full-screen programs otherwise draw for 80x24 whatever
-/// the window says.
-const CELL_WIDTH = 7.2;
-const CELL_HEIGHT = 19;
-
-/// Output kept. A terminal is not a log viewer: this bounds memory on a
-/// command that prints forever, and nothing more.
-const MAX_OUTPUT = 200_000;
-
-/// Strips ANSI escape sequences.
-///
-/// Not interpreted: colouring output properly means an emulator, and an
-/// emulator is a much bigger thing than this view is trying to be.
-/// Leaving them in renders as visible gibberish, which is worse than
-/// plain text.
-export function stripAnsi(text: string): string {
-  return (
-    text
-      // CSI sequences: colours, cursor movement, erase.
-      .replace(/\[[0-9;?]*[ -/]*[@-~]/g, "")
-      // OSC sequences, which carry window titles and end with BEL or ST.
-      .replace(/\][^]*(?:|\\)/g, "")
-      // Lone escapes and the shift-out/shift-in pair some shells emit.
-      .replace(/[()][A-Za-z0-9]/g, "")
-      .replace(/[]/g, "")
-      // Carriage returns without a newline are a progress bar redrawing
-      // in place; without an emulator the least-wrong thing is a break.
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-  );
-}
+/// Floors for a pane too small to measure sensibly. Everything else is
+/// computed from the element, so nothing here assumes a font size.
+const MIN_COLS = 20;
+const MIN_ROWS = 5;
 
 export function Terminal({
   namespace,
@@ -64,29 +45,103 @@ export function Terminal({
   containers: ContainerView[];
 }) {
   const { guard } = useCluster();
+
+  // A shell is a write whatever it is used for, so a context marked
+  // read-only does not hand one out. The backend refuses too; this is so
+  // the user is told why rather than shown a terminal that fails.
+  //
+  // Split into its own component rather than an early return, so the
+  // terminal's hooks are never conditionally called.
+  if (guard === "readOnly") {
+    return (
+      <p className="px-4 py-6 text-center text-sm text-content-muted">
+        This context is marked read-only in Loupe, so no terminal is offered. A
+        shell is a write however it is used.
+      </p>
+    );
+  }
+
+  return <ShellSession namespace={namespace} pod={pod} containers={containers} />;
+}
+
+function ShellSession({
+  namespace,
+  pod,
+  containers,
+}: {
+  namespace: string;
+  pod: string;
+  containers: ContainerView[];
+}) {
   const [container, setContainer] = useState(containers[0]?.name ?? "");
-  const [output, setOutput] = useState("");
   const [shell, setShell] = useState<string | null>(null);
   const [status, setStatus] = useState<"opening" | "open" | "closed">("opening");
   const [error, setError] = useState<string | null>(null);
-  const [input, setInput] = useState("");
 
+  // Held in a ref so the keystroke handler is a stable closure that
+  // always sees the current session rather than the one it was created
+  // with.
   const sessionId = useRef<number | null>(null);
-  const viewRef = useRef<HTMLPreElement>(null);
 
-  // A shell is a write whatever it is used for, so a context marked
-  // read-only does not hand one out. The backend refuses too; this is
-  // so the user is told why rather than shown a terminal that fails.
-  const blocked = guard === "readOnly";
+  const fit = useMemo(() => new FitAddon(), []);
+
+  const { ref, instance } = useXTerm({
+    options: {
+      cursorBlink: true,
+      fontFamily:
+        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+      fontSize: 12,
+      // Transparent, so the surrounding theme shows through rather than
+      // the terminal sitting in a black rectangle in light mode.
+      theme: { background: "rgba(0,0,0,0)" },
+      // Bounded for the same reason the log viewer is: a command that
+      // prints forever must not grow memory without limit.
+      scrollback: 5000,
+    },
+    addons: [fit],
+    listeners: {
+      // Every keystroke, as the terminal encodes it — arrows, Tab,
+      // Ctrl-C, paste, all of it. This is what the old input box could
+      // not do.
+      onData: (data) => {
+        const id = sessionId.current;
+        // xterm is live as soon as it mounts; anything typed before the
+        // session exists has nowhere to go.
+        if (id === null) return;
+        void api.writeExec(id, data).catch((e) => {
+          setError(errorMessage(e));
+          setStatus("closed");
+        });
+      },
+    },
+  });
 
   useEffect(() => {
-    if (!container || blocked) return;
-    let cancelled = false;
+    if (!instance || !container) return;
 
-    setOutput("");
+    let cancelled = false;
     setError(null);
     setShell(null);
     setStatus("opening");
+
+    const resize = () => {
+      try {
+        fit.fit();
+      } catch {
+        // `fit` throws while the pane has no layout — during a tab
+        // change, for instance. The next resize will land.
+        return;
+      }
+      const id = sessionId.current;
+      if (id === null) return;
+      void api
+        .resizeExec(
+          id,
+          Math.max(MIN_COLS, instance.cols),
+          Math.max(MIN_ROWS, instance.rows),
+        )
+        .catch(() => {});
+    };
 
     const channel = new Channel<ExecEvent>();
     channel.onmessage = (event) => {
@@ -95,16 +150,18 @@ export function Terminal({
         case "started":
           setShell(event.shell);
           setStatus("open");
+          // Sized once the session exists; before that there is nothing
+          // to tell.
+          resize();
           break;
         case "output":
-          setOutput((prev) => {
-            const next = prev + stripAnsi(event.data);
-            // Trimmed from the front: the end is what anyone is reading.
-            return next.length > MAX_OUTPUT ? next.slice(-MAX_OUTPUT) : next;
-          });
+          // Written raw. Interpreting the escapes is the whole reason
+          // this is an emulator rather than a text box.
+          instance.write(event.data);
           break;
         case "ended":
           setStatus("closed");
+          instance.write("\r\n\x1b[2m[process exited]\x1b[0m\r\n");
           break;
         case "failed":
           setError(event.message);
@@ -123,6 +180,8 @@ export function Terminal({
           return;
         }
         sessionId.current = id;
+        resize();
+        instance.focus();
       })
       .catch((e) => {
         if (cancelled) return;
@@ -130,58 +189,34 @@ export function Terminal({
         setStatus("closed");
       });
 
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    if (ref.current) observer?.observe(ref.current);
+
     return () => {
       cancelled = true;
+      observer?.disconnect();
       if (sessionId.current !== null) {
         void api.closeExec(sessionId.current);
         sessionId.current = null;
       }
+      // Clearing keeps one container's output from appearing under the
+      // next one's name when only the container changes — the terminal
+      // itself survives that. On unmount useXTerm has already disposed
+      // it by the time this runs, and clearing a disposed terminal
+      // throws, which is noise rather than information.
+      try {
+        instance.clear();
+      } catch {
+        // Already disposed.
+      }
     };
-  }, [namespace, pod, container, blocked]);
-
-  // Keep the remote TTY's idea of the window in step with the real one.
-  const reportSize = useCallback(() => {
-    const el = viewRef.current;
-    const id = sessionId.current;
-    if (!el || id === null) return;
-    const width = Math.max(20, Math.floor(el.clientWidth / CELL_WIDTH));
-    const height = Math.max(5, Math.floor(el.clientHeight / CELL_HEIGHT));
-    void api.resizeExec(id, width, height).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (status !== "open") return;
-    reportSize();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(reportSize);
-    if (viewRef.current) observer.observe(viewRef.current);
-    return () => observer.disconnect();
-  }, [status, reportSize]);
-
-  useEffect(() => {
-    const el = viewRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [output]);
-
-  async function send(text: string) {
-    const id = sessionId.current;
-    if (id === null) return;
-    try {
-      await api.writeExec(id, text);
-    } catch (e) {
-      setError(errorMessage(e));
-      setStatus("closed");
-    }
-  }
-
-  if (blocked) {
-    return (
-      <p className="px-4 py-6 text-center text-sm text-content-muted">
-        This context is marked read-only in Loupe, so no terminal is offered.
-        A shell is a write however it is used.
-      </p>
-    );
-  }
+    // `ref` and `fit` are stable by construction — a ref object and a
+    // useMemo — and are deliberately not dependencies. Listing them
+    // would restart the session on any render where a wrapper happened
+    // to hand back a new object, which tears down a working shell.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance, namespace, pod, container]);
 
   return (
     <div className="flex h-full flex-col bg-[rgb(var(--code-bg))]">
@@ -202,12 +237,6 @@ export function Terminal({
               ? shell
               : "closed"}
         </span>
-        <span
-          className="ml-auto text-2xs text-content-muted"
-          title="Escape sequences are stripped rather than interpreted — this is a place to run ls and cat, not vim"
-        >
-          plain output
-        </span>
       </div>
 
       {error && (
@@ -219,44 +248,14 @@ export function Terminal({
         </div>
       )}
 
-      <pre
-        ref={viewRef}
-        data-testid="terminal-output"
-        className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-4 py-2 font-mono text-xs leading-[1.6] text-[rgb(var(--code-fg))]"
-      >
-        {output}
-      </pre>
-
-      <div className="flex items-center gap-2 border-t px-4 py-2">
-        <span aria-hidden className="shrink-0 font-mono text-xs text-content-muted">
-          ❯
-        </span>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={status !== "open"}
-          aria-label="Terminal input"
-          autoComplete="off"
-          spellCheck={false}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void send(`${input}\n`);
-              setInput("");
-            } else if (e.key === "c" && e.ctrlKey) {
-              // Interrupt, rather than the browser's copy — there is
-              // nothing else Ctrl-C can usefully mean in a terminal.
-              e.preventDefault();
-              void send("");
-            } else if (e.key === "d" && e.ctrlKey) {
-              e.preventDefault();
-              void send("");
-            }
-          }}
-          className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-content-muted disabled:opacity-50"
-          placeholder={status === "open" ? "" : "no shell"}
-        />
-      </div>
+      <div
+        ref={ref}
+        data-testid="terminal"
+        // Clicking anywhere in the pane focuses the terminal, which is
+        // what a terminal does.
+        onMouseDown={() => instance?.focus()}
+        className="min-h-0 flex-1 overflow-hidden px-2 py-1"
+      />
     </div>
   );
 }

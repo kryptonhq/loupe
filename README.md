@@ -227,6 +227,8 @@ is dev-only and is stripped from production builds.
 ```
 src/                     React + TypeScript frontend
   components/            Shared UI (Table, LogViewer, Terminal, palette)
+                         Terminal wraps xterm.js — a shell needs a real
+                         emulator, not a text box that sends lines
   lib/api.ts             Typed wrappers over the Tauri commands
   lib/highlight.ts       YAML tokenizer for the manifest view
   lib/logBuffer.ts       Ring buffer behind the log viewer
