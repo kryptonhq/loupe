@@ -350,8 +350,12 @@ export interface LogOptions {
 /// Messages pushed over the log channel. `ended` and `failed` are
 /// distinct because a stream that stops silently is indistinguishable
 /// from a pod that simply has nothing to say.
+///
+/// Lines arrive in batches rather than one per message. A pod emitting
+/// thousands of lines a second would otherwise be thousands of IPC
+/// round-trips a second, which costs more than rendering them.
 export type LogEvent =
-  | { kind: "line"; text: string }
+  | { kind: "lines"; texts: string[] }
   | { kind: "ended" }
   | { kind: "failed"; message: string };
 

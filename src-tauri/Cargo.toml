@@ -44,7 +44,7 @@ serde_yaml = "0.9.34"
 # helm binary, which a desktop user may not have installed.
 base64 = "0.23.0"
 flate2 = "1.0"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
 window-vibrancy = "0.8.0"
 
 [dev-dependencies]

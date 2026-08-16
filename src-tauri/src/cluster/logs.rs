@@ -33,17 +33,32 @@ use crate::error::Result;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum LogEvent {
-    Line {
-        text: String,
-    },
+    /// A batch of lines, oldest first.
+    ///
+    /// Batched rather than sent per line because each message crosses
+    /// the IPC boundary and is deserialised by the webview. A pod
+    /// emitting 5,000 lines a second is a manageable amount of text and
+    /// an unmanageable number of round-trips.
+    Lines { texts: Vec<String> },
     /// The stream finished normally: the container exited, or a
     /// non-following read reached the end of the buffer.
     Ended,
     /// The stream stopped because something went wrong.
-    Failed {
-        message: String,
-    },
+    Failed { message: String },
 }
+
+/// Lines held before a batch is sent regardless of the timer.
+///
+/// Bounds how far behind the view can fall on a burst: at this size the
+/// batch goes immediately rather than waiting out the interval.
+const MAX_BATCH: usize = 500;
+
+/// How long a partial batch waits for company.
+///
+/// Short enough to read as live — a line appears within a frame or two
+/// of arriving — and long enough that a busy pod coalesces into a few
+/// messages a second instead of thousands.
+const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[derive(Default)]
 pub struct LogStreams {
@@ -150,33 +165,86 @@ pub async fn stream(
 
     let id = streams.allocate();
     let task = tokio::spawn(async move {
-        let mut lines = reader.lines();
-        loop {
-            match lines.try_next().await {
-                Ok(Some(text)) => {
-                    // A failed send means the receiver is gone; there is
-                    // nothing left to stream to.
-                    if !sink.send(LogEvent::Line { text }) {
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    sink.send(LogEvent::Ended);
-                    break;
-                }
-                Err(e) => {
-                    sink.send(LogEvent::Failed {
-                        message: e.to_string(),
-                    });
-                    break;
-                }
-            }
-        }
+        pump(reader.lines(), sink).await;
         streams.finish(id).await;
     });
 
     streams.register(id, task.abort_handle()).await;
     Ok(id)
+}
+
+/// Sends whatever has accumulated, clearing the batch.
+///
+/// Returns false when the receiver has gone away, which is the signal to
+/// stop reading: there is nothing left to stream to.
+fn send_batch(sink: &impl LogSink, batch: &mut Vec<String>) -> bool {
+    if batch.is_empty() {
+        return true;
+    }
+    sink.send(LogEvent::Lines {
+        texts: std::mem::take(batch),
+    })
+}
+
+/// Drains a line stream into a sink, coalescing lines into batches.
+///
+/// Split from `stream` and written against any line stream so the
+/// batching can be tested without a cluster — it is the part with the
+/// timing behaviour, and therefore the part worth testing.
+///
+/// A batch is sent when it reaches `MAX_BATCH` or when `FLUSH_INTERVAL`
+/// passes, whichever comes first. That bounds both the latency of a
+/// quiet pod's occasional line and the message rate of a loud one.
+async fn pump<S>(mut lines: S, sink: impl LogSink)
+where
+    S: futures::Stream<Item = std::io::Result<String>> + Unpin,
+{
+    let mut batch: Vec<String> = Vec::new();
+
+    // Starts one interval in, rather than firing immediately: the first
+    // tick of a plain `interval` completes at once and would send an
+    // empty batch before a single line had been read.
+    let mut ticker =
+        tokio::time::interval_at(tokio::time::Instant::now() + FLUSH_INTERVAL, FLUSH_INTERVAL);
+    // Ticks missed while draining a burst must not queue up and then
+    // fire back to back the moment the pod goes quiet.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            // Both arms hold state in the stream rather than in the
+            // future, so losing a race drops no lines.
+            item = lines.try_next() => match item {
+                Ok(Some(text)) => {
+                    batch.push(text);
+                    if batch.len() >= MAX_BATCH && !send_batch(&sink, &mut batch) {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    // The tail of a short stream would otherwise sit in
+                    // the batch until an interval that never comes.
+                    if !send_batch(&sink, &mut batch) {
+                        return;
+                    }
+                    sink.send(LogEvent::Ended);
+                    return;
+                }
+                Err(e) => {
+                    if !send_batch(&sink, &mut batch) {
+                        return;
+                    }
+                    sink.send(LogEvent::Failed { message: e.to_string() });
+                    return;
+                }
+            },
+            _ = ticker.tick() => {
+                if !send_batch(&sink, &mut batch) {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -205,6 +273,150 @@ mod tests {
         // Leaked deliberately: `stream` needs a 'static registry, and a
         // test process is short-lived.
         Box::leak(Box::new(LogStreams::default()))
+    }
+
+    /// Every line the sink was sent, batches flattened.
+    fn lines_of(events: &[LogEvent]) -> Vec<String> {
+        events
+            .iter()
+            .flat_map(|e| match e {
+                LogEvent::Lines { texts } => texts.clone(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    fn batch_sizes(events: &[LogEvent]) -> Vec<usize> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                LogEvent::Lines { texts } => Some(texts.len()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn collector() -> (Collector, std::sync::Arc<StdMutex<Vec<LogEvent>>>) {
+        let events: std::sync::Arc<StdMutex<Vec<LogEvent>>> = Default::default();
+        (
+            Collector {
+                events: events.clone(),
+                open: std::sync::atomic::AtomicBool::new(true),
+            },
+            events,
+        )
+    }
+
+    fn ok_stream(lines: Vec<&str>) -> impl futures::Stream<Item = std::io::Result<String>> + Unpin {
+        futures::stream::iter(
+            lines
+                .into_iter()
+                .map(|l| Ok(l.to_string()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[tokio::test]
+    async fn pump_batches_lines_rather_than_sending_one_each() {
+        // The whole point of the batching: 900 lines available at once
+        // must not become 900 messages across the IPC boundary.
+        let lines: Vec<String> = (0..900).map(|i| format!("line {i}")).collect();
+        let stream = futures::stream::iter(
+            lines
+                .iter()
+                .map(|l| Ok(l.clone()))
+                .collect::<Vec<std::io::Result<String>>>(),
+        );
+
+        let (sink, events) = collector();
+        pump(stream, sink).await;
+
+        let seen = events.lock().unwrap();
+        assert_eq!(lines_of(&seen), lines, "every line must arrive, in order");
+        let sizes = batch_sizes(&seen);
+        assert!(
+            sizes.len() < 10,
+            "900 lines should coalesce into a handful of batches, got {}",
+            sizes.len()
+        );
+        assert!(
+            sizes.iter().all(|n| *n <= MAX_BATCH),
+            "no batch may exceed MAX_BATCH, got {sizes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_flushes_the_tail_before_ending() {
+        // A stream shorter than a batch would otherwise leave its lines
+        // sitting in the buffer waiting for an interval that never comes.
+        let (sink, events) = collector();
+        pump(ok_stream(vec!["only", "two"]), sink).await;
+
+        let seen = events.lock().unwrap();
+        assert_eq!(lines_of(&seen), vec!["only", "two"]);
+        assert!(
+            matches!(seen.last(), Some(LogEvent::Ended)),
+            "the tail must be sent before Ended, got: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_reports_a_read_error_after_flushing_what_it_had() {
+        // Lines read before the failure are still worth showing — they
+        // are usually the ones explaining it.
+        let stream = futures::stream::iter(vec![
+            Ok("before".to_string()),
+            Err(std::io::Error::other("connection reset")),
+        ]);
+
+        let (sink, events) = collector();
+        pump(stream, sink).await;
+
+        let seen = events.lock().unwrap();
+        assert_eq!(lines_of(&seen), vec!["before"]);
+        match seen.last() {
+            Some(LogEvent::Failed { message }) => assert!(message.contains("connection reset")),
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pump_stops_when_the_receiver_goes_away() {
+        // A closed view must stop the read loop, not keep draining an
+        // open connection to the API server into nowhere.
+        let lines: Vec<std::io::Result<String>> =
+            (0..5_000).map(|i| Ok(format!("line {i}"))).collect();
+
+        let (sink, events) = collector();
+        sink.open.store(false, Ordering::Relaxed);
+        pump(futures::stream::iter(lines), sink).await;
+
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "nothing should be recorded once the receiver has gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_does_not_send_empty_batches_while_idle() {
+        // A quiet pod holds the connection open for a long time. Ticking
+        // an empty batch across the boundary every interval would make
+        // silence cost as much as output.
+        let (tx, rx) = futures::channel::mpsc::unbounded::<std::io::Result<String>>();
+
+        let (sink, events) = collector();
+        let task = tokio::spawn(async move { pump(rx, sink).await });
+
+        // Several intervals with nothing to say.
+        tokio::time::sleep(FLUSH_INTERVAL * 4).await;
+        assert!(events.lock().unwrap().is_empty(), "idle must be silent");
+
+        tx.unbounded_send(Ok("finally".to_string())).unwrap();
+        tokio::time::sleep(FLUSH_INTERVAL * 3).await;
+        assert_eq!(lines_of(&events.lock().unwrap()), vec!["finally"]);
+
+        drop(tx);
+        task.await.unwrap();
     }
 
     #[tokio::test]
