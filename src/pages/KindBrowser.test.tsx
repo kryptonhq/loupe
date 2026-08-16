@@ -52,6 +52,9 @@ function table(rowName: string): ResourceTable {
     rows: [
       { name: rowName, namespace: "agents", cells: [rowName, "Ready", "app=x"] },
     ],
+    // One page, and the last one.
+    continueToken: null,
+    remaining: null,
   };
 }
 
@@ -158,6 +161,49 @@ describe("KindBrowser", () => {
     expect(
       getObject.mock.calls.some(([resource]) => resource.kind === "Model"),
     ).toBe(false);
+  });
+
+  it("asks for one page rather than the whole cluster", async () => {
+    // Time to first row should follow the page size, not the size of the
+    // cluster. Asking for everything meant 20,000 objects crossed the
+    // IPC boundary before the first fifty could render.
+    renderBrowser(AGENT);
+    await screen.findByText("mcp-hello");
+
+    const [, , limit, cursor] = listTable.mock.calls[0];
+    expect(limit).toBeGreaterThan(0);
+    expect(cursor ?? null).toBeNull();
+  });
+
+  it("fetches the next page with the cursor the server gave it", async () => {
+    // The token is opaque: handed back exactly as received.
+    listTable.mockResolvedValueOnce({
+      ...table("mcp-hello"),
+      continueToken: "eyJ2IjoibWV0YSJ9",
+      remaining: 900,
+    });
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+
+    await waitFor(() => expect(listTable).toHaveBeenCalledTimes(2));
+    expect(listTable.mock.calls[1][3]).toBe("eyJ2IjoibWV0YSJ9");
+  });
+
+  it("shows rows from every page that has been loaded", async () => {
+    listTable.mockResolvedValueOnce({
+      ...table("first-page-agent"),
+      continueToken: "cursor",
+      remaining: 1,
+    });
+    listTable.mockResolvedValueOnce(table("second-page-agent"));
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText("second-page-agent")).toBeInTheDocument();
+    // The first page is still there; pages accumulate rather than replace.
+    expect(screen.getByText("first-page-agent")).toBeInTheDocument();
   });
 
   it("follows a related object into a different kind", async () => {

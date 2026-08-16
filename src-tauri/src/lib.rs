@@ -176,8 +176,10 @@ async fn list_table(
     session: tauri::State<'_, SharedSession>,
     resource: cluster::discovery::GvkRef,
     namespace: Option<String>,
+    limit: Option<u32>,
+    continue_token: Option<String>,
 ) -> Result<cluster::table::ResourceTable> {
-    cluster::table::list_table(session.inner(), resource, namespace).await
+    cluster::table::list_table(session.inner(), resource, namespace, limit, continue_token).await
 }
 
 #[tauri::command]

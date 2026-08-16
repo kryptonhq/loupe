@@ -16,6 +16,15 @@ export interface ResourceTableProps<T> {
   onRowClick?: (row: T) => void;
   /// Extra controls rendered to the left of the search box.
   toolbar?: ReactNode;
+  /// True when the cluster holds more objects than have been fetched.
+  /// Everything below is about saying that plainly: a search across a
+  /// partly loaded listing has not searched the cluster, and a table
+  /// that implies otherwise is quietly lying about its results.
+  hasMore?: boolean;
+  /// How many objects the server says are still to come, when it says.
+  remaining?: number | null;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 export function ResourceTable<T>({
@@ -27,6 +36,10 @@ export function ResourceTable<T>({
   empty,
   onRowClick,
   toolbar,
+  hasMore = false,
+  remaining = null,
+  loadingMore = false,
+  onLoadMore,
 }: ResourceTableProps<T>) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
@@ -76,10 +89,24 @@ export function ResourceTable<T>({
         </label>
 
         {rows && (
-          <span className="shrink-0 text-2xs tabular-nums text-content-muted">
+          <span
+            className="shrink-0 text-2xs tabular-nums text-content-muted"
+            title={
+              hasMore
+                ? "More objects exist in the cluster than have been loaded, so search covers what is here"
+                : undefined
+            }
+          >
             {query
               ? `${filtered.length} of ${rows.length}`
               : `${rows.length} item${rows.length === 1 ? "" : "s"}`}
+            {hasMore && (
+              <span className="text-warn">
+                {" "}
+                loaded
+                {remaining !== null && ` · ${remaining} more`}
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -103,6 +130,23 @@ export function ResourceTable<T>({
           </div>
         )}
       </div>
+
+      {hasMore && (
+        <div className="flex items-center justify-between gap-3 border-t bg-warn/[0.04] px-4 py-1.5 text-2xs">
+          <span className="min-w-0 truncate text-content-secondary">
+            Showing the first {rows?.length ?? 0}
+            {remaining !== null && ` of ${(rows?.length ?? 0) + remaining}`}
+            {query && " — search covers only what is loaded"}
+          </span>
+          <button
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="shrink-0 rounded-sm border px-2 py-0.5 text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content disabled:opacity-40"
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
 
       {pageCount > 1 && (
         <div className="flex items-center justify-between border-t px-4 py-1.5 text-2xs">

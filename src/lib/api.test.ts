@@ -90,7 +90,9 @@ describe("api command names and arguments", () => {
     await api.listTable(resource);
     expect(lastCall()).toEqual({
       command: "list_table",
-      args: { resource, namespace: null },
+      // Paged: the limit and cursor are part of the command's signature,
+      // and null means "first page, server's default size".
+      args: { resource, namespace: null, limit: null, continueToken: null },
     });
 
     await api.getHelmRelease("monitoring", "prom");

@@ -236,6 +236,13 @@ export interface ResourceTable {
   columns: TableColumn[];
   rows: TableRow[];
   namespaced: boolean;
+  /// The API server's opaque cursor, when more objects remain. Handed
+  /// straight back on the next request; never parsed or built.
+  continueToken: string | null;
+  /// How many objects the server says are still to come. Advisory — the
+  /// server need not send it — but when present it is what lets the UI
+  /// say "500 of 20,000" instead of implying it has everything.
+  remaining: number | null;
 }
 
 /// One key of a ConfigMap or Secret.
@@ -441,12 +448,22 @@ export const api = {
   listRelated: (resource: GvkRef, namespace: string | null, name: string) =>
     invoke<RelatedObject[]>("list_related", { resource, namespace, name }),
 
-  /// A listing with kubectl's own columns. Works for every kind,
-  /// including CRDs, because the API server does the printing.
-  listTable: (resource: GvkRef, namespace?: string) =>
+  /// One page of a listing with kubectl's own columns. Works for every
+  /// kind, including CRDs, because the API server does the printing.
+  ///
+  /// `continueToken` comes from the previous page and is opaque — it is
+  /// passed back exactly as received.
+  listTable: (
+    resource: GvkRef,
+    namespace?: string,
+    limit?: number,
+    continueToken?: string | null,
+  ) =>
     invoke<ResourceTable>("list_table", {
       resource,
       namespace: namespace ?? null,
+      limit: limit ?? null,
+      continueToken: continueToken ?? null,
     }),
 
   getConfigMapData: (namespace: string, name: string) =>
