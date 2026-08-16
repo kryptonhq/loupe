@@ -4,6 +4,7 @@ import { StatusDot, phaseTone } from "../components/StatusDot";
 import { Chip, ChipList } from "../components/Chip";
 import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
+import { NodeActions } from "../components/NodeActions";
 import { EventsTable } from "../components/EventsTable";
 import { Field, PairChips, QuantityRows, Section } from "../components/Field";
 import { ResourceTable } from "../components/ResourceTable";
@@ -136,6 +137,19 @@ export function NodeDetail({ name, onClose }: NodeDetailProps) {
       onClose={onClose}
       backTo="nodes"
       error={q.error}
+      actions={
+        node && (
+          <NodeActions
+            node={name}
+            schedulable={node.schedulable}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ["node", name] });
+              queryClient.invalidateQueries({ queryKey: ["nodes"] });
+              queryClient.invalidateQueries({ queryKey: ["pods-on-node", name] });
+            }}
+          />
+        )
+      }
     >
       {tab === "overview" &&
         (node ? (

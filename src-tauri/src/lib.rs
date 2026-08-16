@@ -8,6 +8,8 @@
 
 mod cluster;
 mod error;
+mod export;
+mod guard;
 mod settings;
 mod vibrancy;
 
@@ -21,13 +23,69 @@ fn list_contexts() -> Result<Vec<ContextInfo>> {
 }
 
 #[tauri::command]
-async fn connect(session: tauri::State<'_, SharedSession>, context: String) -> Result<ClusterInfo> {
-    cluster::connect(session.inner(), &context).await
+async fn connect(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    context: String,
+) -> Result<ClusterInfo> {
+    let info = cluster::connect(session.inner(), &context).await?;
+
+    // Recorded only on success: a context that could not be reached is
+    // not one the user was working with, and putting it at the top of
+    // the shortlist would be actively unhelpful.
+    //
+    // A failure to persist is not a reason to fail the connection —
+    // the user is connected either way.
+    let mut settings = settings::load(&app);
+    settings.record_recent(&context);
+    let _ = settings::save(&app, &settings);
+
+    Ok(info)
+}
+
+/// Pins or unpins a context, returning the settings as stored.
+#[tauri::command]
+fn set_context_pinned(
+    app: tauri::AppHandle,
+    context: String,
+    pinned: bool,
+) -> Result<settings::Settings> {
+    let mut settings = settings::load(&app);
+    settings.set_pinned(&context, pinned);
+    settings::save(&app, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
 async fn current_cluster(session: tauri::State<'_, SharedSession>) -> Result<Option<ClusterInfo>> {
     Ok(session.inner().info().await)
+}
+
+/// Every cluster connected this session, active one first.
+///
+/// Switching to one of these costs nothing — its client and its API
+/// discovery are still held.
+#[tauri::command]
+async fn connected_clusters(session: tauri::State<'_, SharedSession>) -> Result<Vec<ClusterInfo>> {
+    Ok(session.inner().connected().await)
+}
+
+/// Drops one cluster's connection without leaving the others.
+#[tauri::command]
+async fn disconnect_context(
+    session: tauri::State<'_, SharedSession>,
+    context: String,
+) -> Result<()> {
+    // Streams belonging to the cluster being dropped would otherwise
+    // keep running against it. They are not tracked per context, so
+    // everything long-lived goes — the alternative is a leak that only
+    // shows up after an afternoon of switching.
+    log_streams().cancel_all().await;
+    exec_sessions().close_all().await;
+    forwards().stop_all().await;
+    watches().stop_all().await;
+    session.inner().drop_context(&context).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -36,6 +94,15 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // leaving. Dropping the session alone would leave them running
     // against a cluster the user believes they disconnected from.
     log_streams().cancel_all().await;
+    // A terminal left open is a connection to the cluster the user
+    // believes they left, and a process still running in a container.
+    exec_sessions().close_all().await;
+    // A forward into a cluster the user believes they left is a hole
+    // they no longer know is open.
+    forwards().stop_all().await;
+    // A watch against a cluster the user has left is an open connection
+    // they no longer know about.
+    watches().stop_all().await;
     session.inner().clear().await;
     Ok(())
 }
@@ -145,8 +212,10 @@ async fn list_table(
     session: tauri::State<'_, SharedSession>,
     resource: cluster::discovery::GvkRef,
     namespace: Option<String>,
+    limit: Option<u32>,
+    continue_token: Option<String>,
 ) -> Result<cluster::table::ResourceTable> {
-    cluster::table::list_table(session.inner(), resource, namespace).await
+    cluster::table::list_table(session.inner(), resource, namespace, limit, continue_token).await
 }
 
 #[tauri::command]
@@ -182,6 +251,18 @@ async fn get_object(
     cluster::discovery::get_object(session.inner(), resource, namespace, &name).await
 }
 
+/// Everything connected to one object: what owns it, what it owns, what
+/// selects it, and what it names.
+#[tauri::command]
+async fn list_related(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<Vec<cluster::related::RelatedObject>> {
+    cluster::related::related(session.inner(), resource, namespace, &name).await
+}
+
 /// Writes an edited object back, as a full replace.
 ///
 /// The target is carried alongside the text so the apply can refuse an
@@ -189,11 +270,109 @@ async fn get_object(
 /// `cluster::edit` for why that matters.
 #[tauri::command]
 async fn apply_yaml(
+    app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     target: cluster::edit::EditTarget,
     yaml: String,
 ) -> Result<cluster::edit::ApplyResult> {
+    // Checked here rather than only in the UI. Hiding a save button is a
+    // courtesy; refusing the write is the guarantee, and it is the one
+    // that still holds if a view forgets to ask.
+    guard_writes(&app, session.inner()).await?;
     cluster::edit::apply_yaml(session.inner(), target, &yaml).await
+}
+
+/// Sets a workload's replica count through the scale subresource.
+#[tauri::command]
+async fn scale_object(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+    replicas: i32,
+) -> Result<i32> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::scale(session.inner(), resource, namespace, &name, replicas).await
+}
+
+/// Rolls a workload by touching its pod template, the way
+/// `kubectl rollout restart` does.
+#[tauri::command]
+async fn rollout_restart(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<String> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::rollout_restart(session.inner(), resource, namespace, &name).await
+}
+
+#[tauri::command]
+async fn delete_object(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<()> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::delete_object(session.inner(), resource, namespace, &name).await
+}
+
+/// Cordons or uncordons a node.
+#[tauri::command]
+async fn set_node_schedulable(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    node: String,
+    schedulable: bool,
+) -> Result<bool> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::set_node_schedulable(session.inner(), &node, schedulable).await
+}
+
+/// Evicts the pods on a node, reporting each one on `channel`.
+///
+/// A drain can take minutes; a spinner that says nothing for minutes is
+/// indistinguishable from a hang, so progress is streamed rather than
+/// summarised at the end.
+#[tauri::command]
+async fn drain_node(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    node: String,
+    channel: tauri::ipc::Channel<cluster::actions::DrainEvent>,
+) -> Result<()> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::drain(session.inner(), &node, channel).await
+}
+
+/// Refuses a write when the connected context is marked read-only.
+async fn guard_writes(app: &tauri::AppHandle, session: &cluster::Session) -> Result<()> {
+    guard::ensure_session_writable(&settings::load(app), session.info().await.as_ref())
+}
+
+/// The guard in force for a context, so the UI can mark it and confirm
+/// before a write rather than only reporting the refusal afterwards.
+#[tauri::command]
+fn context_guard(app: tauri::AppHandle, context: String) -> guard::Guard {
+    guard::guard_for(&settings::load(&app), &context)
+}
+
+/// Marks a context read-only, protected, or neither.
+#[tauri::command]
+fn set_context_guard(
+    app: tauri::AppHandle,
+    context: String,
+    guard: guard::Guard,
+) -> Result<settings::Settings> {
+    let mut settings = settings::load(&app);
+    settings.set_guard(&context, guard);
+    settings::save(&app, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -223,10 +402,142 @@ async fn start_pod_logs(
     cluster::logs::stream(session.inner(), log_streams(), options, channel).await
 }
 
+/// Streams every pod matching a selector into one merged view.
+///
+/// A Deployment's logs are the interleaved logs of its replicas; reading
+/// them one pod at a time is the slowest way to find the replica that
+/// differs, which is why `stern` exists.
+#[tauri::command]
+async fn start_merged_logs(
+    session: tauri::State<'_, SharedSession>,
+    options: cluster::logs::MergedLogOptions,
+    channel: tauri::ipc::Channel<cluster::logs::LogEvent>,
+) -> Result<u64> {
+    cluster::logs::stream_merged(session.inner(), log_streams(), options, channel).await
+}
+
 /// Cancels a stream. False means it had already ended by itself.
 #[tauri::command]
 async fn stop_pod_logs(id: u64) -> Result<bool> {
     Ok(log_streams().cancel(id).await)
+}
+
+/// Writes text to a file the user picks, returning the path or None if
+/// they cancelled.
+///
+/// The frontend supplies the text and a suggested name and nothing else
+/// — see `export` for why the path never crosses the boundary.
+#[tauri::command]
+async fn save_text(
+    app: tauri::AppHandle,
+    suggested_name: String,
+    contents: String,
+) -> Result<Option<String>> {
+    let saved = export::save_text(&app, &suggested_name, &contents).await?;
+    Ok(saved.map(|p| p.display().to_string()))
+}
+
+/// Opens a shell in a container. Output arrives on `channel`.
+///
+/// The most privileged thing this app can do, and the one place the
+/// "Rust owns every connection" rule matters most — the webview sends
+/// keystrokes and receives bytes, never a connection of its own.
+#[tauri::command]
+async fn start_exec(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    options: cluster::exec::ExecOptions,
+    channel: tauri::ipc::Channel<cluster::exec::ExecEvent>,
+) -> Result<u64> {
+    // A shell is a write, whatever it is used for. A context marked
+    // read-only should not hand out one.
+    guard_writes(&app, session.inner()).await?;
+    cluster::exec::start(session.inner(), exec_sessions(), options, channel).await
+}
+
+#[tauri::command]
+async fn write_exec(id: u64, data: String) -> Result<()> {
+    exec_sessions().write(id, &data).await
+}
+
+/// Propagates the window size to the remote TTY, so full-screen programs
+/// in the container draw at the size the user can actually see.
+#[tauri::command]
+async fn resize_exec(id: u64, width: u16, height: u16) -> Result<()> {
+    exec_sessions().resize(id, width, height).await
+}
+
+/// Closes a session. False means it had already ended by itself.
+#[tauri::command]
+async fn close_exec(id: u64) -> Result<bool> {
+    Ok(exec_sessions().close(id).await)
+}
+
+/// Starts forwarding a local port into the cluster.
+#[tauri::command]
+async fn start_forward(
+    session: tauri::State<'_, SharedSession>,
+    target: cluster::forward::ForwardTarget,
+    local_port: u16,
+    remote_port: u16,
+) -> Result<cluster::forward::ForwardView> {
+    cluster::forward::start(session.inner(), forwards(), target, local_port, remote_port).await
+}
+
+/// Everything currently forwarding, with live byte and connection
+/// counts — a forward that is doing nothing has to be distinguishable
+/// from one that is broken.
+#[tauri::command]
+async fn list_forwards() -> Result<Vec<cluster::forward::ForwardView>> {
+    Ok(forwards().list().await)
+}
+
+/// Stops a forward and releases the local port.
+#[tauri::command]
+async fn stop_forward(id: u64) -> Result<bool> {
+    Ok(forwards().stop(id).await)
+}
+
+/// Watches a kind, pushing a signal whenever an object changes.
+///
+/// Replaces the fixed ten-second refetch: one LIST and then deltas,
+/// which is both cheaper and fresher than asking again on a timer.
+#[tauri::command]
+async fn start_watch(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    channel: tauri::ipc::Channel<cluster::watch::WatchEvent>,
+) -> Result<u64> {
+    cluster::watch::start(session.inner(), watches(), resource, namespace, channel).await
+}
+
+/// Stops a watch. False means it had already stopped by itself.
+#[tauri::command]
+async fn stop_watch(id: u64) -> Result<bool> {
+    Ok(watches().stop(id).await)
+}
+
+/// Open watches. A process singleton for the same reason as the other
+/// registries: the tasks must outlive the command that started them.
+fn watches() -> &'static cluster::watch::Watches {
+    static WATCHES: std::sync::OnceLock<cluster::watch::Watches> = std::sync::OnceLock::new();
+    WATCHES.get_or_init(cluster::watch::Watches::default)
+}
+
+/// Active forwards. A process singleton for the same reason as the log
+/// and terminal registries: the listeners must outlive the command that
+/// created them.
+fn forwards() -> &'static cluster::forward::Forwards {
+    static FORWARDS: std::sync::OnceLock<cluster::forward::Forwards> = std::sync::OnceLock::new();
+    FORWARDS.get_or_init(cluster::forward::Forwards::default)
+}
+
+/// Open terminals, for the same reason the log registry exists: the
+/// handles must outlive the command that created them.
+fn exec_sessions() -> &'static cluster::exec::ExecSessions {
+    static SESSIONS: std::sync::OnceLock<cluster::exec::ExecSessions> = std::sync::OnceLock::new();
+    SESSIONS.get_or_init(cluster::exec::ExecSessions::default)
 }
 
 /// The stream registry outlives any single command, and abort handles
@@ -265,12 +576,22 @@ struct VibrancyState(bool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // No plugins are registered. `tauri-plugin-opener` came with the
-    // scaffold and was never used: it lets the webview ask the OS to
-    // open an arbitrary URL or path, and Loupe renders strings that come
-    // from the cluster — annotations, chart homepages, CRD fields. A
-    // capability nothing needs is one that cannot be misused later.
+    // One plugin, and it is worth saying why.
+    //
+    // `tauri-plugin-opener` came with the scaffold and was dropped: it
+    // lets the webview ask the OS to open an arbitrary URL or path, and
+    // Loupe renders strings that come from the cluster — annotations,
+    // chart homepages, CRD fields. A capability nothing needs is one
+    // that cannot be misused later.
+    //
+    // `tauri-plugin-dialog` is different in the way that matters. Its
+    // commands are never exposed to the webview — the capability file
+    // grants none of them — and it is driven only from Rust, where the
+    // frontend can pass text and a suggested filename and nothing else.
+    // Every write is behind a dialog the user has to accept, and no
+    // cluster-supplied string can name a destination.
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(SharedSession::default());
             app.manage(VibrancyState(vibrancy::setup(app)));
@@ -280,6 +601,8 @@ pub fn run() {
             list_contexts,
             connect,
             current_cluster,
+            connected_clusters,
+            disconnect_context,
             disconnect,
             list_namespaces,
             list_pods,
@@ -297,13 +620,33 @@ pub fn run() {
             get_object,
             get_config_map_data,
             get_secret_data,
+            list_related,
             apply_yaml,
+            scale_object,
+            rollout_restart,
+            delete_object,
+            set_node_schedulable,
+            drain_node,
             list_helm_releases,
             get_helm_release,
             start_pod_logs,
+            start_merged_logs,
             stop_pod_logs,
+            start_watch,
+            stop_watch,
+            start_forward,
+            list_forwards,
+            stop_forward,
+            start_exec,
+            write_exec,
+            resize_exec,
+            close_exec,
+            save_text,
             get_settings,
             set_theme,
+            set_context_pinned,
+            context_guard,
+            set_context_guard,
             vibrancy_enabled,
         ])
         .run(tauri::generate_context!())

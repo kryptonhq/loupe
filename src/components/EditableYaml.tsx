@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { YamlView } from "./YamlView";
+import { ApplyConfirm } from "./ApplyConfirm";
+import { useCluster } from "../lib/clusterContext";
 import {
   api,
   errorMessage,
   isConflict,
   type EditTarget,
+  type Guard,
 } from "../lib/api";
 
 // The YAML tab, in both its readings: a highlighted view, and — for the
@@ -25,24 +28,45 @@ interface EditableYamlProps {
   /// Called after a successful apply, with the stored YAML. The parent
   /// refetches so the rest of the page catches up.
   onApplied: (yaml: string) => void;
+  /// The connected context, named in the confirmation. Taken from the
+  /// surrounding cluster scope when not given, which is how every page
+  /// uses it; passed explicitly only in tests.
+  context?: string | null;
+  /// What the connected context allows. A read-only context is not
+  /// offered an editor at all — the backend would refuse the write, and
+  /// a button that always fails is worse than no button.
+  guard?: Guard;
 }
 
-export function EditableYaml({ source, target, onApplied }: EditableYamlProps) {
+export function EditableYaml({
+  source,
+  target,
+  onApplied,
+  context: contextProp,
+  guard: guardProp,
+}: EditableYamlProps) {
+  const scope = useCluster();
+  const context = contextProp ?? scope.context;
+  const guard = guardProp ?? scope.guard;
+
   // Null means "not editing". The draft is deliberately independent of
   // `source`: while it exists, nothing the server says overwrites it.
   const [draft, setDraft] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (draft !== null) textarea.current?.focus();
-  }, [draft !== null]);
+    if (draft !== null && !confirming) textarea.current?.focus();
+  }, [draft !== null, confirming]);
+
+  const writable = target !== null && guard !== "readOnly";
 
   if (draft === null) {
     return (
       <div className="relative h-full">
-        {target && (
+        {writable && (
           <button
             onClick={() => {
               setError(null);
@@ -53,8 +77,33 @@ export function EditableYaml({ source, target, onApplied }: EditableYamlProps) {
             Edit
           </button>
         )}
+        {target && guard === "readOnly" && (
+          // Said out loud rather than left as an absent button, so the
+          // reason is legible and the user knows where to change it.
+          <span
+            className="glass-overlay absolute right-20 top-2 z-20 px-2 py-1 text-2xs text-content-muted"
+            title={`${context ?? "This context"} is marked read-only in Loupe`}
+          >
+            Read-only
+          </span>
+        )}
         <YamlView source={source} />
       </div>
+    );
+  }
+
+  if (confirming && target) {
+    return (
+      <ApplyConfirm
+        target={target}
+        original={source}
+        edited={draft}
+        context={context ?? "this cluster"}
+        guard={guard}
+        busy={saving}
+        onCancel={() => setConfirming(false)}
+        onConfirm={save}
+      />
     );
   }
 
@@ -70,8 +119,12 @@ export function EditableYaml({ source, target, onApplied }: EditableYamlProps) {
       // stored YAML, which carries the resourceVersion the next edit
       // needs.
       setDraft(null);
+      setConfirming(false);
       onApplied(result.yaml);
     } catch (e) {
+      // Back to the editor with the text intact — the confirmation has
+      // nothing useful to show once the write has been refused.
+      setConfirming(false);
       setError(e);
     } finally {
       setSaving(false);
@@ -98,13 +151,15 @@ export function EditableYaml({ source, target, onApplied }: EditableYamlProps) {
             Cancel
           </button>
           <button
-            onClick={save}
+            // Goes to the diff rather than straight to the cluster:
+            // applying without looking is how outages start.
+            onClick={() => setConfirming(true)}
             // Saving an unchanged document would burn a resourceVersion
             // and could only ever fail or do nothing.
             disabled={saving || !dirty}
             className="rounded-sm bg-accent/[0.18] px-2 py-1 text-2xs font-medium text-accent transition-colors duration-150 ease-swift hover:bg-accent/[0.26] disabled:opacity-40 disabled:hover:bg-accent/[0.18]"
           >
-            {saving ? "Applying…" : "Apply"}
+            Review &amp; apply
           </button>
         </span>
       </div>

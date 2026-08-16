@@ -41,3 +41,10 @@ ignore:
   - "src/test/**"
   - "**/*.test.ts"
   - "**/*.test.tsx"
+  # The Tauri command surface: one-line wrappers that unpack arguments
+  # and call into src/cluster. Every one needs a live AppHandle and a
+  # cluster to invoke, so the only tests possible here would assert that
+  # a function calls the function it obviously calls. The decisions that
+  # used to live in this file — the read-only write guard — moved to
+  # src/guard.rs precisely so they could be covered.
+  - "src-tauri/src/lib.rs"

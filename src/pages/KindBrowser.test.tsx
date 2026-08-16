@@ -1,3 +1,6 @@
+// Cross-kind navigation is what the Related tab is for: from a
+// Deployment you reach its ReplicaSet, from there its Pods, and from a
+// Pod the ConfigMap it mounts. The listing stays where it was.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -10,11 +13,19 @@ vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
   return {
     ...actual,
+    // Listings hold a watch now, and Tauri's own Channel reaches into
+    // webview internals that do not exist here.
+    Channel: class {
+      onmessage?: (event: unknown) => void;
+    },
     api: {
       ...actual.api,
+      startWatch: vi.fn().mockResolvedValue(1),
+      stopWatch: vi.fn().mockResolvedValue(true),
       listTable: vi.fn(),
       getObject: vi.fn(),
       listNamespaces: vi.fn(),
+      listRelated: vi.fn(),
     },
   };
 });
@@ -22,6 +33,7 @@ vi.mock("../lib/api", async (original) => {
 const listTable = vi.mocked(api.listTable);
 const getObject = vi.mocked(api.getObject);
 const listNamespaces = vi.mocked(api.listNamespaces);
+const listRelated = vi.mocked(api.listRelated);
 
 function kind(name: string): KindEntry {
   return {
@@ -47,6 +59,9 @@ function table(rowName: string): ResourceTable {
     rows: [
       { name: rowName, namespace: "agents", cells: [rowName, "Ready", "app=x"] },
     ],
+    // One page, and the last one.
+    continueToken: null,
+    remaining: null,
   };
 }
 
@@ -74,6 +89,8 @@ beforeEach(() => {
   listTable.mockReset();
   getObject.mockReset();
   listNamespaces.mockReset();
+  listRelated.mockReset();
+  listRelated.mockResolvedValue([]);
 
   listTable.mockResolvedValue(table("mcp-hello"));
   listNamespaces.mockResolvedValue([]);
@@ -151,5 +168,108 @@ describe("KindBrowser", () => {
     expect(
       getObject.mock.calls.some(([resource]) => resource.kind === "Model"),
     ).toBe(false);
+  });
+
+  it("asks for one page rather than the whole cluster", async () => {
+    // Time to first row should follow the page size, not the size of the
+    // cluster. Asking for everything meant 20,000 objects crossed the
+    // IPC boundary before the first fifty could render.
+    renderBrowser(AGENT);
+    await screen.findByText("mcp-hello");
+
+    const [, , limit, cursor] = listTable.mock.calls[0];
+    expect(limit).toBeGreaterThan(0);
+    expect(cursor ?? null).toBeNull();
+  });
+
+  it("fetches the next page with the cursor the server gave it", async () => {
+    // The token is opaque: handed back exactly as received.
+    listTable.mockResolvedValueOnce({
+      ...table("mcp-hello"),
+      continueToken: "eyJ2IjoibWV0YSJ9",
+      remaining: 900,
+    });
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+
+    await waitFor(() => expect(listTable).toHaveBeenCalledTimes(2));
+    expect(listTable.mock.calls[1][3]).toBe("eyJ2IjoibWV0YSJ9");
+  });
+
+  it("shows rows from every page that has been loaded", async () => {
+    listTable.mockResolvedValueOnce({
+      ...table("first-page-agent"),
+      continueToken: "cursor",
+      remaining: 1,
+    });
+    listTable.mockResolvedValueOnce(table("second-page-agent"));
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText("second-page-agent")).toBeInTheDocument();
+    // The first page is still there; pages accumulate rather than replace.
+    expect(screen.getByText("first-page-agent")).toBeInTheDocument();
+  });
+
+  it("follows a related object into a different kind", async () => {
+    // The whole point of the Related tab. The listing stays on Agents;
+    // the detail view moves to the ConfigMap.
+    listRelated.mockResolvedValue([
+      {
+        relation: "uses",
+        group: "",
+        version: "v1",
+        kind: "ConfigMap",
+        name: "agent-config",
+        namespace: "agents",
+        reachable: true,
+        detail: "volume config",
+      },
+    ]);
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByText("mcp-hello"));
+    await waitFor(() => expect(getObject).toHaveBeenCalled());
+
+    await user.click(await screen.findByRole("button", { name: "Related" }));
+    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
+
+    await waitFor(() =>
+      expect(
+        getObject.mock.calls.some(([resource]) => resource.kind === "ConfigMap"),
+      ).toBe(true),
+    );
+  });
+
+  it("goes back to where it was followed from, not to the listing", async () => {
+    // Following a chain and then closing should retrace it, or the back
+    // button loses everything you navigated through.
+    listRelated.mockResolvedValue([
+      {
+        relation: "uses",
+        group: "",
+        version: "v1",
+        kind: "ConfigMap",
+        name: "agent-config",
+        namespace: "agents",
+        reachable: true,
+        detail: null,
+      },
+    ]);
+
+    const { user } = renderBrowser(AGENT);
+    await user.click(await screen.findByText("mcp-hello"));
+    await user.click(await screen.findByRole("button", { name: "Related" }));
+    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
+    await screen.findByRole("button", { name: "Back to mcp-hello" });
+
+    await user.click(screen.getByRole("button", { name: "Back to mcp-hello" }));
+
+    // Back at the Agent, not at the Agents listing.
+    expect(
+      await screen.findByRole("button", { name: "Back to agent" }),
+    ).toBeInTheDocument();
   });
 });

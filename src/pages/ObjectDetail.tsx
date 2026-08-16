@@ -12,8 +12,12 @@ import {
   Section,
 } from "../components/Field";
 import { DataView } from "../components/DataView";
+import { RelatedPanel } from "../components/RelatedPanel";
+import { ObjectActions } from "../components/ObjectActions";
+import { LogViewer } from "../components/LogViewer";
+import { workloadSelector } from "../lib/kinds";
 import { hasDataTab } from "../lib/kinds";
-import { api, type GvkRef } from "../lib/api";
+import { api, type GvkRef, type RelatedObject } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
 
 // Detail for an object of a kind we know nothing about at compile time.
@@ -68,6 +72,10 @@ interface ObjectDetailProps {
   name: string;
   onClose: () => void;
   backTo?: string;
+  /// Opens another object from the Related tab. Without it the tab is a
+  /// list you cannot follow, which is most of the point gone, so the
+  /// tab is only offered when a caller can navigate.
+  onOpenRelated?: (related: RelatedObject) => void;
 }
 
 export function ObjectDetail({
@@ -76,6 +84,7 @@ export function ObjectDetail({
   name,
   onClose,
   backTo,
+  onOpenRelated,
 }: ObjectDetailProps) {
   const [tab, setTab] = useState("overview");
   const queryClient = useQueryClient();
@@ -87,16 +96,36 @@ export function ObjectDetail({
   });
   const object = q.data;
 
+  // Verbs the API server reports for this kind. Used to hide actions
+  // rather than to offer buttons that are guaranteed to be refused.
+  // Shared cache key with the sidebar, so this costs no extra discovery.
+  const discovery = useQuery({
+    queryKey: ["api-resources"],
+    queryFn: () => api.listApiResources(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const verbs = discovery.data?.find(
+    (r) => r.kind === resource.kind && r.group === resource.group,
+  )?.verbs;
+
   // ConfigMaps and Secrets are opened to read their contents, so those
   // get a tab of their own rather than sending people to the YAML.
   const dataKind = object ? hasDataTab(object.kind, object.apiVersion) : null;
+
+  // The label selector a merged log view streams by, read from the
+  // object's own spec. Null for anything that does not select pods.
+  const selector = object ? workloadSelector(object.kind, object.yaml) : null;
 
   // A cluster-scoped object has no namespace to look for events in, and
   // guessing "default" would show somebody else's.
   const tabs: TabSpec[] = [
     { id: "overview", label: "Overview" },
     ...(dataKind && namespace ? [{ id: "data", label: "Data" }] : []),
+    // A workload's logs are the interleaved logs of its replicas, which
+    // is the whole reason this tab exists here rather than only on pods.
+    ...(selector && namespace ? [{ id: "logs", label: "Logs" }] : []),
     ...(namespace ? [{ id: "events", label: "Events" }] : []),
+    ...(onOpenRelated ? [{ id: "related", label: "Related" }] : []),
     { id: "yaml", label: "YAML" },
   ];
 
@@ -117,6 +146,20 @@ export function ObjectDetail({
       onClose={onClose}
       backTo={backTo}
       error={q.error}
+      actions={
+        object && (
+          <ObjectActions
+            resource={resource}
+            namespace={namespace}
+            name={name}
+            verbs={verbs}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: key });
+              queryClient.invalidateQueries({ queryKey: ["table"] });
+            }}
+          />
+        )
+      }
     >
       {tab === "overview" &&
         (object ? (
@@ -173,8 +216,25 @@ export function ObjectDetail({
         <DataView namespace={namespace} name={name} kind={dataKind} />
       )}
 
+      {tab === "logs" && selector && namespace && (
+        <LogViewer
+          namespace={namespace}
+          pod=""
+          containers={[]}
+          selector={selector}
+          workload={`${resource.kind} ${name}`}
+        />
+      )}
+
       {tab === "events" && namespace && (
         <EventsTable namespace={namespace} name={name} />
+      )}
+
+      {tab === "related" && onOpenRelated && (
+        <RelatedPanel
+          target={{ resource, namespace, name }}
+          onOpen={onOpenRelated}
+        />
       )}
 
       {tab === "yaml" &&

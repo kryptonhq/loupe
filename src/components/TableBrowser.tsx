@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Panel } from "./Panel";
 import { ResourceTable } from "./ResourceTable";
 import { type Column } from "./Table";
 import { Select } from "./Select";
 import { StatusDot } from "./StatusDot";
 import { api, type GvkRef, type TableRow } from "../lib/api";
+import { useWatch } from "../lib/useWatch";
 import { statusTone } from "../pages/ObjectDetail";
 
 // A listing for any kind, with the columns the API server printed.
@@ -22,6 +23,13 @@ import { statusTone } from "../pages/ObjectDetail";
 /// Deliberately small: guessing wrong paints a healthy row red. These
 /// are the names Kubernetes' own printers use for a health verdict.
 const STATUS_COLUMNS = new Set(["status", "state", "phase", "ready", "available"]);
+
+/// Objects asked for per request.
+///
+/// Large enough that most listings are one round trip, small enough that
+/// a 20,000-object namespace renders its first rows immediately rather
+/// than after the whole thing has crossed the IPC boundary.
+const PAGE_SIZE = 500;
 
 /// Cells the server prints for "nothing here".
 function isEmptyCell(value: string) {
@@ -51,20 +59,40 @@ export function TableBrowser({
   // else off a narrow pane.
   const [wide, setWide] = useState(false);
 
-  const q = useQuery({
+  // Fetched a page at a time. Asking for everything meant a busy cluster
+  // pulled 20,000 objects across the IPC boundary before the first fifty
+  // could render — time to first row should follow the page size, not
+  // the size of the cluster.
+  const q = useInfiniteQuery({
     queryKey: ["table", resource.group, resource.version, resource.kind, namespace],
-    queryFn: () => api.listTable(resource, namespace || undefined),
+    queryFn: ({ pageParam }) =>
+      api.listTable(resource, namespace || undefined, PAGE_SIZE, pageParam),
+    initialPageParam: null as string | null,
+    // The server's own cursor. Absent means this was the last page.
+    getNextPageParam: (last) => last.continueToken ?? undefined,
     placeholderData: (prev) => prev,
   });
+
+  const pages = q.data?.pages ?? [];
+  // Columns come from the first page; every page of one listing is
+  // printed by the same code and describes the same columns.
+  const table = pages[0];
+  const rows = useMemo(() => pages.flatMap((p) => p.rows), [pages]);
+  const lastPage = pages[pages.length - 1];
+
+  // Freshness comes from a watch rather than a timer: nothing is
+  // fetched until something actually changes, and a rollout's worth of
+  // events coalesces into one refetch.
+  const watchKey = ["table", resource.group, resource.version, resource.kind, namespace];
+  const watch = useWatch(resource, namespace || null, watchKey);
 
   const namespaces = useQuery({
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
-    enabled: q.data?.namespaced ?? false,
+    enabled: table?.namespaced ?? false,
   });
 
   const columns: Column<TableRow>[] = useMemo(() => {
-    const table = q.data;
     if (!table) return [];
 
     const visible = table.columns
@@ -104,9 +132,9 @@ export function TableBrowser({
       });
     }
     return cells;
-  }, [q.data, wide, namespace]);
+  }, [table, wide, namespace]);
 
-  const hasWideColumns = (q.data?.columns ?? []).some((c) => c.priority > 0);
+  const hasWideColumns = (table?.columns ?? []).some((c) => c.priority > 0);
 
   return (
     <Panel
@@ -115,19 +143,40 @@ export function TableBrowser({
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
-      actions={actions}
+      actions={
+        <>
+          {/* Said out loud when it is not: a listing that has quietly
+              stopped updating is worse than one that admits it. */}
+          {watch.error && (
+            <span
+              className="shrink-0 text-2xs text-warn"
+              title={`${watch.error} — the listing still works, but will not update by itself`}
+            >
+              not live
+            </span>
+          )}
+          {actions}
+        </>
+      }
     >
       <ResourceTable
         columns={columns}
-        rows={q.data?.rows}
+        rows={q.data ? rows : undefined}
         isLoading={q.isLoading}
         rowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
         searchText={(row) => `${row.name} ${row.namespace ?? ""} ${row.cells.join(" ")}`}
         empty={`No ${title.toLowerCase()} here.`}
         onRowClick={onOpen}
+        // Said out loud rather than implied: a search over a partly
+        // loaded listing has not searched the cluster, and a table that
+        // does not say so is quietly lying about its results.
+        hasMore={q.hasNextPage}
+        remaining={lastPage?.remaining ?? null}
+        loadingMore={q.isFetchingNextPage}
+        onLoadMore={() => q.fetchNextPage()}
         toolbar={
           <>
-            {q.data?.namespaced && (
+            {table?.namespaced && (
               <Select value={namespace} onChange={setNamespace}>
                 <option value="">All namespaces</option>
                 {(namespaces.data ?? []).map((ns) => (

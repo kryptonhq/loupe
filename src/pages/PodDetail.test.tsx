@@ -211,7 +211,8 @@ describe("PodDetail tabs", () => {
     await screen.findByText("worker-1");
     await user.click(screen.getByRole("button", { name: "Logs" }));
 
-    const picker = await screen.findByRole("combobox");
+    // Named, because the log viewer's toolbar has more than one select.
+    const picker = await screen.findByRole("combobox", { name: "Container" });
     expect(picker).toHaveTextContent("migrate");
     expect(picker).toHaveTextContent("app");
   });

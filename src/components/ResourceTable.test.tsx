@@ -40,6 +40,67 @@ function renderTable(props: Partial<Parameters<typeof ResourceTable<Row>>[0]> = 
   return userEvent.setup();
 }
 
+// Paged listings. The rule running through all of it: never imply the
+// table holds the whole cluster when it does not. A search over a
+// partly loaded listing that reports "3 of 500" as though 500 were
+// everything is quietly wrong, and quietly wrong is the worst kind.
+describe("ResourceTable partial results", () => {
+  it("says nothing extra when it has everything", async () => {
+    renderTable();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing the first/)).not.toBeInTheDocument();
+  });
+
+  it("says so when the cluster holds more than was loaded", async () => {
+    renderTable({ hasMore: true, remaining: 19_500 });
+
+    expect(screen.getByText(/Showing the first 3/)).toBeInTheDocument();
+    // 3 loaded plus 19,500 still to come.
+    expect(screen.getByText(/19503/)).toBeInTheDocument();
+  });
+
+  it("fetches the next page on request", async () => {
+    const onLoadMore = vi.fn();
+    const user = renderTable({ hasMore: true, onLoadMore });
+
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(onLoadMore).toHaveBeenCalled();
+  });
+
+  it("does not ask twice while a page is in flight", async () => {
+    renderTable({ hasMore: true, loadingMore: true });
+    expect(screen.getByRole("button", { name: "Loading…" })).toBeDisabled();
+  });
+
+  it("warns that a search only covered what is loaded", async () => {
+    // The specific way a paged table can mislead: you search, get
+    // nothing, and conclude the object is not in the cluster.
+    const user = renderTable({ hasMore: true, remaining: 19_500 });
+    await user.type(screen.getByPlaceholderText("Search…"), "pod-001");
+
+    expect(
+      screen.getByText(/search covers only what is loaded/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about search coverage when it has everything", async () => {
+    const user = renderTable();
+    await user.type(screen.getByPlaceholderText("Search…"), "pod-001");
+    expect(
+      screen.queryByText(/search covers only what is loaded/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("copes with a server that does not say how many remain", async () => {
+    // remainingItemCount is advisory; plenty of servers omit it, and the
+    // table must not render "of NaN".
+    renderTable({ hasMore: true, remaining: null });
+
+    expect(screen.getByText(/Showing the first 3/)).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+  });
+});
+
 describe("ResourceTable search", () => {
   it("narrows on every term rather than widening", async () => {
     // "kube running" should mean both, not either. An OR here would

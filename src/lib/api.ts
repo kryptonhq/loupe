@@ -55,6 +55,11 @@ export interface ApiError {
     | "unknown_resource"
     | "invalid_edit"
     | "conflict"
+    | "settings"
+    | "export"
+    /// Refused locally because the context is marked read-only. Not an
+    /// RBAC denial — the cluster was never asked.
+    | "read_only"
     | "kubernetes";
   message: string;
 }
@@ -64,6 +69,13 @@ export interface ApiError {
 export function isConflict(e: unknown): boolean {
   return isApiError(e) && e.kind === "conflict";
 }
+
+/// What a context allows, as recorded in Loupe's own settings.
+///
+/// Emphatically not RBAC: `readOnly` means the request was never sent,
+/// and the fix is in the user's preferences rather than in their
+/// permissions.
+export type Guard = "open" | "protected" | "readOnly";
 
 export function isApiError(e: unknown): e is ApiError {
   return (
@@ -227,6 +239,13 @@ export interface ResourceTable {
   columns: TableColumn[];
   rows: TableRow[];
   namespaced: boolean;
+  /// The API server's opaque cursor, when more objects remain. Handed
+  /// straight back on the next request; never parsed or built.
+  continueToken: string | null;
+  /// How many objects the server says are still to come. Advisory — the
+  /// server need not send it — but when present it is what lets the UI
+  /// say "500 of 20,000" instead of implying it has everything.
+  remaining: number | null;
 }
 
 /// One key of a ConfigMap or Secret.
@@ -266,11 +285,40 @@ export interface ObjectDetail extends Editable {
   yaml: string;
 }
 
+/// Why two objects are related. Doubles as the section heading.
+export type Relation =
+  | "ownedBy"
+  | "owns"
+  | "selects"
+  | "selectedBy"
+  | "uses"
+  | "routes";
+
+export interface RelatedObject {
+  relation: Relation;
+  group: string;
+  version: string;
+  kind: string;
+  name: string;
+  namespace: string | null;
+  /// False when the object is referenced but could not be read. Shown
+  /// rather than dropped — a dangling owner reference is usually the
+  /// explanation for whatever you are looking at.
+  reachable: boolean;
+  /// Extra wording for the row, such as which volume mounts it.
+  detail: string | null;
+}
+
 /// Persisted user preferences. Stored as JSON in the app's config
 /// directory by the Rust side, not in the webview — a preference should
 /// survive a cache clear and be a file the user can read or delete.
 export interface Settings {
   theme: Theme;
+  /// Contexts connected to, most recent first. Recorded by the backend
+  /// on a successful connect.
+  recentContexts: string[];
+  /// Contexts the user pinned, in their own order.
+  pinnedContexts: string[];
 }
 
 /// Identifies the object an editor is open on. Sent back with the edit
@@ -350,15 +398,109 @@ export interface LogOptions {
 /// Messages pushed over the log channel. `ended` and `failed` are
 /// distinct because a stream that stops silently is indistinguishable
 /// from a pod that simply has nothing to say.
+///
+/// Lines arrive in batches rather than one per message. A pod emitting
+/// thousands of lines a second would otherwise be thousands of IPC
+/// round-trips a second, which costs more than rendering them.
 export type LogEvent =
-  | { kind: "line"; text: string }
+  /// `source` is set only when the view is merging several pods, so a
+  /// single-pod stream wastes no space prefixing every line.
+  | { kind: "lines"; texts: string[]; source?: string }
+  /// A pod joined a merged view — the first resolution of a selector, or
+  /// a replica that appeared during a rollout.
+  | { kind: "podStarted"; pod: string }
+  /// One pod's stream finished. Not the view ending: during a rollout,
+  /// old replicas finish while new ones are starting.
+  | { kind: "podEnded"; pod: string }
+  /// More pods match than are being streamed. Said out loud rather than
+  /// silently truncated.
+  | { kind: "capped"; streaming: number; matched: number }
   | { kind: "ended" }
   | { kind: "failed"; message: string };
+
+/// Which pods to merge into one view, and how to read them.
+export interface MergedLogOptions {
+  namespace: string;
+  /// A label selector in the API server's own syntax, taken from the
+  /// workload's spec.selector.
+  selector: string;
+  container?: string | null;
+  tailLines?: number | null;
+  timestamps: boolean;
+}
+
+/// What happened to one object in a watched kind.
+export type WatchEvent =
+  | {
+      kind: "changed";
+      change: "applied" | "deleted";
+      name: string;
+      namespace: string | null;
+    }
+  /// The watch relisted — the resourceVersion aged out, or the
+  /// connection dropped and came back. Anything cached from before is
+  /// suspect and should be refetched wholesale rather than patched.
+  | { kind: "reset" }
+  /// The watch could not be kept up. A view that has quietly stopped
+  /// updating is worse than one that says it has.
+  | { kind: "failed"; message: string };
+
+/// What a forward points at. A Service target survives a rollout: the
+/// pod is resolved per connection, so the next one picks a live pod.
+export type ForwardTarget =
+  | { kind: "pod"; namespace: string; name: string }
+  | { kind: "service"; namespace: string; name: string };
+
+export interface ForwardView {
+  id: number;
+  target: ForwardTarget;
+  localPort: number;
+  remotePort: number;
+  /// Bytes moved both ways, so a forward doing nothing is
+  /// distinguishable from one that is broken.
+  bytes: number;
+  connections: number;
+  /// The last thing that went wrong, kept rather than cleared.
+  lastError: string | null;
+}
+
+/// Output from a running exec session.
+export type ExecEvent =
+  | { kind: "output"; data: string }
+  /// Which shell was actually opened, after the probe.
+  | { kind: "started"; shell: string }
+  | { kind: "ended" }
+  | { kind: "failed"; message: string };
+
+export interface ExecOptions {
+  namespace: string;
+  pod: string;
+  container?: string | null;
+  /// Overrides the automatic bash-then-sh probe.
+  shell?: string | null;
+}
+
+/// Progress from a node drain. Per-pod because a drain is a sequence of
+/// independent evictions, several of which are expected to be skipped
+/// and any of which may be refused by a PodDisruptionBudget.
+export type DrainEvent =
+  | { kind: "started"; pods: number }
+  | { kind: "evicted"; pod: string }
+  | { kind: "skipped"; pod: string; reason: string }
+  | { kind: "failed"; pod: string; message: string }
+  | { kind: "finished"; evicted: number; skipped: number; failed: number };
 
 export const api = {
   listContexts: () => invoke<ContextInfo[]>("list_contexts"),
   connect: (context: string) => invoke<ClusterInfo>("connect", { context }),
   currentCluster: () => invoke<ClusterInfo | null>("current_cluster"),
+  /// Every cluster connected this session, active one first. Switching
+  /// to one of these costs nothing: its client and its API discovery
+  /// are still held.
+  connectedClusters: () => invoke<ClusterInfo[]>("connected_clusters"),
+  /// Drops one cluster's connection without leaving the others.
+  disconnectContext: (context: string) =>
+    invoke<void>("disconnect_context", { context }),
   disconnect: () => invoke<void>("disconnect"),
   listNamespaces: () => invoke<NamespaceSummary[]>("list_namespaces"),
   listPods: (namespace?: string) =>
@@ -394,12 +536,27 @@ export const api = {
   getObject: (resource: GvkRef, namespace: string | null, name: string) =>
     invoke<ObjectDetail>("get_object", { resource, namespace, name }),
 
-  /// A listing with kubectl's own columns. Works for every kind,
-  /// including CRDs, because the API server does the printing.
-  listTable: (resource: GvkRef, namespace?: string) =>
+  /// Everything connected to an object: what owns it, what it owns,
+  /// what selects it, and what it names in its own spec.
+  listRelated: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<RelatedObject[]>("list_related", { resource, namespace, name }),
+
+  /// One page of a listing with kubectl's own columns. Works for every
+  /// kind, including CRDs, because the API server does the printing.
+  ///
+  /// `continueToken` comes from the previous page and is opaque — it is
+  /// passed back exactly as received.
+  listTable: (
+    resource: GvkRef,
+    namespace?: string,
+    limit?: number,
+    continueToken?: string | null,
+  ) =>
     invoke<ResourceTable>("list_table", {
       resource,
       namespace: namespace ?? null,
+      limit: limit ?? null,
+      continueToken: continueToken ?? null,
     }),
 
   getConfigMapData: (namespace: string, name: string) =>
@@ -409,6 +566,31 @@ export const api = {
   /// `reveal`, so checking one does not put the rest on screen.
   getSecretData: (namespace: string, name: string, reveal: string[] = []) =>
     invoke<ResourceData>("get_secret_data", { namespace, name, reveal }),
+
+  /// Sets a workload's replica count through the scale subresource.
+  scaleObject: (
+    resource: GvkRef,
+    namespace: string | null,
+    name: string,
+    replicas: number,
+  ) => invoke<number>("scale_object", { resource, namespace, name, replicas }),
+
+  /// Rolls a workload by touching its pod template, the way
+  /// `kubectl rollout restart` does. Resolves with the stamp written.
+  rolloutRestart: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<string>("rollout_restart", { resource, namespace, name }),
+
+  deleteObject: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<void>("delete_object", { resource, namespace, name }),
+
+  setNodeSchedulable: (node: string, schedulable: boolean) =>
+    invoke<boolean>("set_node_schedulable", { node, schedulable }),
+
+  /// Evicts the pods on a node. Progress arrives on `channel`, because a
+  /// drain can take minutes and a silent spinner is indistinguishable
+  /// from a hang.
+  drainNode: (node: string, channel: Channel<DrainEvent>) =>
+    invoke<void>("drain_node", { node, channel }),
 
   /// Writes an edited object back as a full replace. Rejects an edit
   /// whose identity no longer matches `target`, and one based on a
@@ -430,8 +612,58 @@ export const api = {
     invoke<number>("start_pod_logs", { options, channel }),
   stopPodLogs: (id: number) => invoke<boolean>("stop_pod_logs", { id }),
 
+  /// Streams every pod matching a selector into one merged view — a
+  /// Deployment's logs are the interleaved logs of its replicas.
+  startMergedLogs: (options: MergedLogOptions, channel: Channel<LogEvent>) =>
+    invoke<number>("start_merged_logs", { options, channel }),
+
+  /// Watches a kind. Replaces polling: one LIST and then deltas.
+  startWatch: (
+    resource: GvkRef,
+    namespace: string | null,
+    channel: Channel<WatchEvent>,
+  ) => invoke<number>("start_watch", { resource, namespace, channel }),
+  stopWatch: (id: number) => invoke<boolean>("stop_watch", { id }),
+
+  /// Starts forwarding a local port into the cluster. Rejects when the
+  /// local port is taken, before the forward is listed.
+  startForward: (
+    target: ForwardTarget,
+    localPort: number,
+    remotePort: number,
+  ) => invoke<ForwardView>("start_forward", { target, localPort, remotePort }),
+  listForwards: () => invoke<ForwardView[]>("list_forwards"),
+  stopForward: (id: number) => invoke<boolean>("stop_forward", { id }),
+
+  /// Opens a shell in a container. Output arrives on `channel`.
+  startExec: (options: ExecOptions, channel: Channel<ExecEvent>) =>
+    invoke<number>("start_exec", { options, channel }),
+  writeExec: (id: number, data: string) =>
+    invoke<void>("write_exec", { id, data }),
+  /// Propagates the window size, so full-screen programs in the
+  /// container draw at the size the user can see.
+  resizeExec: (id: number, width: number, height: number) =>
+    invoke<void>("resize_exec", { id, width, height }),
+  closeExec: (id: number) => invoke<boolean>("close_exec", { id }),
+
+  /// Writes text to a file the user picks. Resolves with the path
+  /// written, or null if they cancelled — an ordinary outcome, not an
+  /// error. The path is chosen in the native dialog; the webview never
+  /// names one.
+  saveText: (suggestedName: string, contents: string) =>
+    invoke<string | null>("save_text", { suggestedName, contents }),
+
   getSettings: () => invoke<Settings>("get_settings"),
   setTheme: (theme: Theme) => invoke<Settings>("set_theme", { theme }),
+  /// Pins or unpins a context in the picker, returning the settings as
+  /// stored.
+  setContextPinned: (context: string, pinned: boolean) =>
+    invoke<Settings>("set_context_pinned", { context, pinned }),
+  /// The safeguard in force for a context, so the UI can mark it and
+  /// confirm before a write rather than only reporting the refusal.
+  contextGuard: (context: string) => invoke<Guard>("context_guard", { context }),
+  setContextGuard: (context: string, guard: Guard) =>
+    invoke<Settings>("set_context_guard", { context, guard }),
 
   /// Whether native window vibrancy actually took effect. Asked rather
   /// than inferred from the platform: support depends on OS build and,

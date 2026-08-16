@@ -442,6 +442,9 @@ const FIXTURES: Record<string, unknown> = {
   // columns the kind actually has.
   list_table: {
     namespaced: true,
+    // The demo fixture is one page and the last one.
+    continueToken: null,
+    remaining: null,
     columns: [
       { name: "Name", priority: 0, description: null },
       { name: "Type", priority: 0, description: null },

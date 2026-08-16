@@ -1,6 +1,6 @@
 [package]
 name = "loupe"
-version = "0.1.2"
+version = "0.1.5"
 description = "An open-source desktop client for Kubernetes"
 authors = ["The Loupe Authors"]
 license = "Apache-2.0"
@@ -23,11 +23,19 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Pinned to 4.0 rather than 4.2 because of "ws", which exec and
+# port-forward are built on — both are websocket-upgraded connections
+# rather than ordinary requests. kube 4.2's ws feature requires
+# tokio-tungstenite 0.29, which in turn requires tungstenite 0.29 — a
+# version that was never published (0.28 is followed by 0.30), so the
+# feature cannot resolve at all. 4.0 has the same API surface this app
+# uses and a ws feature that builds. Worth revisiting once upstream
+# republishes.
 # rustls-tls avoids linking OpenSSL. "ring" is not optional alongside it:
 # rustls 0.23 refuses to pick a crypto provider on its own, and without
 # exactly one enabled the first connect panics with "Could not
 # automatically determine the process-level CryptoProvider".
-kube = { version = "4.2.0", default-features = false, features = ["client", "config", "runtime", "derive", "rustls-tls", "ring"] }
+kube = { version = "4.0.0", default-features = false, features = ["client", "config", "runtime", "derive", "rustls-tls", "ring", "ws"] }
 # The v1_XX feature pins which API surface is compiled in, not which
 # clusters can be reached — the client stays compatible across versions.
 k8s-openapi = { version = "0.28.0", default-features = false, features = ["v1_33"] }
@@ -44,8 +52,18 @@ serde_yaml = "0.9.34"
 # helm binary, which a desktop user may not have installed.
 base64 = "0.23.0"
 flate2 = "1.0"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 window-vibrancy = "0.8.0"
+# The native save dialog, for writing logs out to a file. Driven from
+# Rust rather than exposed to the webview: the frontend hands over text
+# and a suggested name, and never names a path or gains filesystem
+# reach. See src/export.rs, and the note in lib.rs on why this plugin is
+# carried when tauri-plugin-opener was not.
+tauri-plugin-dialog = "2"
+# Only for the RFC3339 stamp `kubectl rollout restart` writes into a pod
+# template. k8s-openapi is built without default features, so its chrono
+# re-export is not available.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 

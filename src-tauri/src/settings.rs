@@ -29,10 +29,75 @@ pub enum Theme {
     Dark,
 }
 
+/// How many recently-used contexts to remember.
+///
+/// Enough to cover the handful anyone moves between in a day, short
+/// enough that the recents list stays a shortlist rather than becoming a
+/// second copy of the kubeconfig.
+const MAX_RECENT: usize = 8;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub theme: Theme,
+
+    /// Contexts connected to, most recent first.
+    ///
+    /// On a kubeconfig with thousands of entries, this is what makes the
+    /// picker usable: four names are the ones anyone actually opens.
+    pub recent_contexts: Vec<String>,
+
+    /// Contexts the user pinned, in their own order. Distinct from
+    /// recents because pinning is a deliberate statement and should not
+    /// be pushed out by a day of connecting to something else.
+    pub pinned_contexts: Vec<String>,
+
+    /// Contexts where writes are refused outright. See `crate::guard`.
+    pub read_only_contexts: Vec<String>,
+
+    /// Contexts where a write has to be confirmed by typing the name.
+    pub protected_contexts: Vec<String>,
+
+    /// Glob patterns marking contexts protected without naming each one
+    /// — `*prod*` covers six hundred clusters in one line.
+    pub protected_patterns: Vec<String>,
+}
+
+impl Settings {
+    /// Records a connection, moving the context to the front.
+    ///
+    /// Deduplicates rather than appending: connecting to the same
+    /// cluster twice should not fill the list with one name.
+    pub fn record_recent(&mut self, context: &str) {
+        self.recent_contexts.retain(|c| c != context);
+        self.recent_contexts.insert(0, context.to_string());
+        self.recent_contexts.truncate(MAX_RECENT);
+    }
+
+    /// Pins or unpins a context. Pinning is idempotent; a context is
+    /// never listed twice.
+    pub fn set_pinned(&mut self, context: &str, pinned: bool) {
+        self.pinned_contexts.retain(|c| c != context);
+        if pinned {
+            self.pinned_contexts.push(context.to_string());
+        }
+    }
+
+    /// Marks a context read-only, protected, or neither.
+    ///
+    /// Always removes it from both lists first, so a context can never
+    /// end up in two states at once and the setting means exactly what
+    /// the user last chose.
+    pub fn set_guard(&mut self, context: &str, guard: crate::guard::Guard) {
+        use crate::guard::Guard;
+        self.read_only_contexts.retain(|c| c != context);
+        self.protected_contexts.retain(|c| c != context);
+        match guard {
+            Guard::ReadOnly => self.read_only_contexts.push(context.to_string()),
+            Guard::Protected => self.protected_contexts.push(context.to_string()),
+            Guard::Open => {}
+        }
+    }
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf> {
@@ -118,8 +183,122 @@ mod tests {
 
     #[test]
     fn settings_serialise_with_the_key_the_frontend_reads() {
-        let json = serde_json::to_string(&Settings { theme: Theme::Dark }).unwrap();
-        assert_eq!(json, r#"{"theme":"dark"}"#);
+        let settings = Settings {
+            theme: Theme::Dark,
+            ..Default::default()
+        };
+        let json: serde_json::Value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["theme"], "dark");
+        assert_eq!(json["recentContexts"], serde_json::json!([]));
+        assert_eq!(json["pinnedContexts"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_settings_file_from_an_older_build_still_reads() {
+        // The keys were added after 0.1.2 shipped. An existing file has
+        // only `theme`, and must not read as corrupt.
+        let settings = parse(r#"{"theme":"dark"}"#);
+        assert_eq!(settings.theme, Theme::Dark);
+        assert!(settings.recent_contexts.is_empty());
+        assert!(settings.pinned_contexts.is_empty());
+    }
+
+    #[test]
+    fn the_most_recent_context_comes_first() {
+        let mut settings = Settings::default();
+        settings.record_recent("staging");
+        settings.record_recent("prod");
+        assert_eq!(settings.recent_contexts, ["prod", "staging"]);
+    }
+
+    #[test]
+    fn reconnecting_moves_a_context_up_rather_than_repeating_it() {
+        // Otherwise a day of switching between two clusters fills the
+        // shortlist with two names.
+        let mut settings = Settings::default();
+        settings.record_recent("a");
+        settings.record_recent("b");
+        settings.record_recent("a");
+        assert_eq!(settings.recent_contexts, ["a", "b"]);
+    }
+
+    #[test]
+    fn recents_stay_a_shortlist() {
+        let mut settings = Settings::default();
+        for i in 0..50 {
+            settings.record_recent(&format!("ctx-{i}"));
+        }
+        assert_eq!(settings.recent_contexts.len(), MAX_RECENT);
+        // The cap drops the oldest, not the newest.
+        assert_eq!(settings.recent_contexts[0], "ctx-49");
+    }
+
+    #[test]
+    fn pinning_is_idempotent_and_unpinning_removes() {
+        let mut settings = Settings::default();
+        settings.set_pinned("prod", true);
+        settings.set_pinned("prod", true);
+        assert_eq!(settings.pinned_contexts, ["prod"]);
+
+        settings.set_pinned("prod", false);
+        assert!(settings.pinned_contexts.is_empty());
+    }
+
+    #[test]
+    fn pins_keep_the_order_they_were_added() {
+        // The user's own ordering; re-sorting it would discard the only
+        // thing a pin is expressing.
+        let mut settings = Settings::default();
+        settings.set_pinned("b", true);
+        settings.set_pinned("a", true);
+        assert_eq!(settings.pinned_contexts, ["b", "a"]);
+    }
+
+    #[test]
+    fn a_context_is_never_in_two_guard_states_at_once() {
+        use crate::guard::Guard;
+        let mut settings = Settings::default();
+
+        settings.set_guard("prod", Guard::Protected);
+        settings.set_guard("prod", Guard::ReadOnly);
+        assert_eq!(settings.read_only_contexts, ["prod"]);
+        assert!(settings.protected_contexts.is_empty());
+
+        settings.set_guard("prod", Guard::Open);
+        assert!(settings.read_only_contexts.is_empty());
+        assert!(settings.protected_contexts.is_empty());
+    }
+
+    #[test]
+    fn setting_the_same_guard_twice_does_not_duplicate_it() {
+        use crate::guard::Guard;
+        let mut settings = Settings::default();
+        settings.set_guard("prod", Guard::ReadOnly);
+        settings.set_guard("prod", Guard::ReadOnly);
+        assert_eq!(settings.read_only_contexts, ["prod"]);
+    }
+
+    #[test]
+    fn unpinning_something_never_pinned_is_not_an_error() {
+        let mut settings = Settings::default();
+        settings.set_pinned("ghost", false);
+        assert!(settings.pinned_contexts.is_empty());
+    }
+
+    #[test]
+    fn recents_and_pins_survive_a_write_and_a_read() {
+        // The shared TempDir helper below, rather than reaching for
+        // `env::temp_dir` again: it fails closed on a path something
+        // else already made, and cleans up even when the test panics.
+        let dir = TempDir::new("contexts");
+        let path = dir.join("settings.json");
+
+        let mut settings = Settings::default();
+        settings.record_recent("prod");
+        settings.set_pinned("staging", true);
+        write_to(&path, &settings).expect("write");
+
+        assert_eq!(read_from(&path), settings);
     }
 
     #[test]
@@ -193,7 +372,14 @@ mod tests {
         let dir = TempDir::new("roundtrip");
         let path = dir.join("settings.json");
 
-        write_to(&path, &Settings { theme: Theme::Dark }).expect("write");
+        write_to(
+            &path,
+            &Settings {
+                theme: Theme::Dark,
+                ..Default::default()
+            },
+        )
+        .expect("write");
         assert_eq!(read_from(&path).theme, Theme::Dark);
     }
 
@@ -209,6 +395,7 @@ mod tests {
             &path,
             &Settings {
                 theme: Theme::Light,
+                ..Default::default()
             },
         )
         .expect("write");
@@ -221,11 +408,19 @@ mod tests {
         let dir = TempDir::new("replace");
         let path = dir.join("settings.json");
 
-        write_to(&path, &Settings { theme: Theme::Dark }).expect("first");
+        write_to(
+            &path,
+            &Settings {
+                theme: Theme::Dark,
+                ..Default::default()
+            },
+        )
+        .expect("first");
         write_to(
             &path,
             &Settings {
                 theme: Theme::Light,
+                ..Default::default()
             },
         )
         .expect("second");
@@ -255,7 +450,14 @@ mod tests {
         assert_eq!(read_from(&path).theme, Theme::System);
 
         // And the next save repairs it.
-        write_to(&path, &Settings { theme: Theme::Dark }).expect("overwrite");
+        write_to(
+            &path,
+            &Settings {
+                theme: Theme::Dark,
+                ..Default::default()
+            },
+        )
+        .expect("overwrite");
         assert_eq!(read_from(&path).theme, Theme::Dark);
     }
 }

@@ -56,6 +56,14 @@ pub struct ResourceTable {
     /// Whether the objects listed carry a namespace, so the UI knows
     /// whether a namespace filter means anything here.
     pub namespaced: bool,
+    /// The API server's opaque cursor, when more objects remain. Passed
+    /// straight back on the next request; never parsed or constructed.
+    pub continue_token: Option<String>,
+    /// How many objects the server says are still to come. Advisory —
+    /// the server is not obliged to send it — but when present it is
+    /// what lets the UI say "500 of 20,000" rather than implying it has
+    /// everything.
+    pub remaining: Option<i64>,
 }
 
 // The wire shapes. Deliberately permissive: an aggregated API server can
@@ -69,6 +77,21 @@ struct WireTable {
     column_definitions: Vec<WireColumn>,
     #[serde(default)]
     rows: Vec<WireRow>,
+    #[serde(default)]
+    metadata: WireListMeta,
+}
+
+/// The list metadata carrying the cursor.
+///
+/// `continue` is a Rust keyword, hence the rename; both fields are
+/// optional because a server that returned everything sends neither.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireListMeta {
+    #[serde(rename = "continue", default)]
+    continue_token: Option<String>,
+    #[serde(default)]
+    remaining_item_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,13 +182,25 @@ fn convert(table: WireTable, namespaced: bool) -> ResourceTable {
             .collect(),
         rows,
         namespaced,
+        // An empty string is what some servers send for "no more"; it
+        // is not a valid cursor and must not be sent back as one.
+        continue_token: table.metadata.continue_token.filter(|t| !t.is_empty()),
+        remaining: table.metadata.remaining_item_count,
     }
 }
 
+/// One page of a listing, printed by the API server.
+///
+/// Previously this asked for everything at once, so a namespace-wide
+/// listing on a busy cluster pulled every object before anything
+/// rendered — and the frontend then showed the first fifty. Time to
+/// first row should be a function of the page size, not of cluster size.
 pub async fn list_table(
     session: &Session,
     gvk: GvkRef,
     namespace: Option<String>,
+    limit: Option<u32>,
+    continue_token: Option<String>,
 ) -> Result<ResourceTable> {
     let client = session.client().await?;
     let (resource, caps) = resolve(session, &gvk).await?;
@@ -175,9 +210,17 @@ pub async fn list_table(
     // behind it can never disagree about which URL they are talking to.
     let scope = scoped_namespace(namespaced, namespace.as_deref());
 
+    let mut params = ListParams::default();
+    if let Some(limit) = limit {
+        params = params.limit(limit);
+    }
+    // Opaque: handed back exactly as received. An empty token is not a
+    // cursor, and sending one makes the API server reject the request.
+    params.continue_token = continue_token.filter(|t| !t.is_empty());
+
     let url = <kube::api::DynamicObject as Resource>::url_path(&resource, scope);
     let request = Request::new(url)
-        .list(&ListParams::default())
+        .list(&params)
         .map_err(|e| AppError::Kube(format!("build request: {e}")))?;
 
     // Same request kube would send, with the Accept header swapped for
@@ -332,12 +375,65 @@ mod tests {
         assert_eq!(table.columns.len(), 1);
     }
 
+    #[test]
+    fn a_page_carries_the_cursor_for_the_next_one() {
+        let table = convert(
+            wire(json!({
+                "columnDefinitions": [{"name": "Name"}],
+                "rows": [],
+                "metadata": { "continue": "eyJ2IjoibWV0YSJ9", "remainingItemCount": 19_500 }
+            })),
+            true,
+        );
+        assert_eq!(table.continue_token.as_deref(), Some("eyJ2IjoibWV0YSJ9"));
+        // What lets the UI say "500 of 20,000" rather than implying it
+        // has the lot.
+        assert_eq!(table.remaining, Some(19_500));
+    }
+
+    #[test]
+    fn the_last_page_carries_no_cursor() {
+        let table = convert(
+            wire(json!({ "columnDefinitions": [], "rows": [], "metadata": {} })),
+            true,
+        );
+        assert!(table.continue_token.is_none());
+        assert!(table.remaining.is_none());
+    }
+
+    #[test]
+    fn an_empty_cursor_is_treated_as_no_cursor() {
+        // Some servers send "" rather than omitting the field. Handing
+        // that back as a cursor makes the next request fail.
+        let table = convert(
+            wire(json!({
+                "columnDefinitions": [],
+                "rows": [],
+                "metadata": { "continue": "" }
+            })),
+            true,
+        );
+        assert!(table.continue_token.is_none());
+    }
+
+    #[test]
+    fn a_table_without_metadata_still_parses() {
+        // Aggregated API servers omit pieces; a missing metadata block
+        // means "everything", not a failed listing.
+        let table = convert(
+            wire(json!({ "columnDefinitions": [{"name": "Name"}], "rows": [] })),
+            false,
+        );
+        assert!(table.continue_token.is_none());
+        assert_eq!(table.columns.len(), 1);
+    }
+
     #[tokio::test]
     #[ignore = "requires a reachable cluster; set LOUPE_TEST_CONTEXT"]
     async fn prints_the_same_columns_kubectl_would() {
         let session = crate::cluster::live::session().await;
 
-        let services = list_table(&session, gvk("", "v1", "Service"), None)
+        let services = list_table(&session, gvk("", "v1", "Service"), None, None, None)
             .await
             .expect("list services");
         let names: Vec<&str> = services.columns.iter().map(|c| c.name.as_str()).collect();
@@ -356,7 +452,7 @@ mod tests {
             "every row should be as wide as the header"
         );
 
-        let deployments = list_table(&session, gvk("apps", "v1", "Deployment"), None)
+        let deployments = list_table(&session, gvk("apps", "v1", "Deployment"), None, None, None)
             .await
             .expect("list deployments");
         println!(
@@ -374,7 +470,7 @@ mod tests {
             "Deployment has wide-only columns"
         );
 
-        let nodes = list_table(&session, gvk("", "v1", "Node"), None)
+        let nodes = list_table(&session, gvk("", "v1", "Node"), None, None, None)
             .await
             .expect("list nodes");
         assert!(!nodes.namespaced, "nodes are cluster-scoped");
@@ -397,6 +493,8 @@ mod tests {
         let table = list_table(
             &session,
             gvk(&target.group, &target.version, &target.kind),
+            None,
+            None,
             None,
         )
         .await
