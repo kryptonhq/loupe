@@ -9,6 +9,7 @@
 mod cluster;
 mod error;
 mod export;
+mod guard;
 mod settings;
 mod vibrancy;
 
@@ -219,11 +220,47 @@ async fn get_object(
 /// `cluster::edit` for why that matters.
 #[tauri::command]
 async fn apply_yaml(
+    app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     target: cluster::edit::EditTarget,
     yaml: String,
 ) -> Result<cluster::edit::ApplyResult> {
+    // Checked here rather than only in the UI. Hiding a save button is a
+    // courtesy; refusing the write is the guarantee, and it is the one
+    // that still holds if a view forgets to ask.
+    guard_writes(&app, session.inner()).await?;
     cluster::edit::apply_yaml(session.inner(), target, &yaml).await
+}
+
+/// Refuses a write when the connected context is marked read-only.
+///
+/// Not connected is left to the operation itself to report — it has a
+/// better error for it than this does.
+async fn guard_writes(app: &tauri::AppHandle, session: &cluster::Session) -> Result<()> {
+    let Some(info) = session.info().await else {
+        return Ok(());
+    };
+    guard::ensure_writable(&settings::load(app), &info.context)
+}
+
+/// The guard in force for a context, so the UI can mark it and confirm
+/// before a write rather than only reporting the refusal afterwards.
+#[tauri::command]
+fn context_guard(app: tauri::AppHandle, context: String) -> guard::Guard {
+    guard::guard_for(&settings::load(&app), &context)
+}
+
+/// Marks a context read-only, protected, or neither.
+#[tauri::command]
+fn set_context_guard(
+    app: tauri::AppHandle,
+    context: String,
+    guard: guard::Guard,
+) -> Result<settings::Settings> {
+    let mut settings = settings::load(&app);
+    settings.set_guard(&context, guard);
+    settings::save(&app, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -361,6 +398,8 @@ pub fn run() {
             get_settings,
             set_theme,
             set_context_pinned,
+            context_guard,
+            set_context_guard,
             vibrancy_enabled,
         ])
         .run(tauri::generate_context!())

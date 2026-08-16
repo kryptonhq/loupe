@@ -46,9 +46,11 @@ const CLUSTER: ClusterInfo = {
 function setup({
   cluster = CLUSTER as ClusterInfo | null,
   view = { type: "nodes" } as Parameters<typeof Sidebar>[0]["view"],
+  guard = "open" as Parameters<typeof Sidebar>[0]["guard"],
 } = {}) {
   listApiResources.mockResolvedValue(CRDS);
   const onSelect = vi.fn();
+  const onGuardChange = vi.fn();
 
   render(
     <QueryClientProvider
@@ -60,13 +62,46 @@ function setup({
         onSelect={onSelect}
         theme="system"
         onThemeChange={vi.fn()}
+        guard={guard}
+        onGuardChange={onGuardChange}
         onSwitchCluster={vi.fn()}
         onDisconnect={vi.fn()}
       />
     </QueryClientProvider>,
   );
-  return { onSelect, user: userEvent.setup() };
+  return { onSelect, onGuardChange, user: userEvent.setup() };
 }
+
+// The guard is only worth having if it is visible. These assert that a
+// marked cluster is legible from the rail — including in a screenshot,
+// which is where most people will first see that this exists.
+describe("Sidebar guard", () => {
+  it("says nothing extra about an ordinary cluster", () => {
+    setup({ guard: "open" });
+    expect(screen.queryByText("Read-only")).not.toBeInTheDocument();
+    expect(screen.queryByText("Protected")).not.toBeInTheDocument();
+  });
+
+  it("marks a read-only cluster where the version usually sits", () => {
+    setup({ guard: "readOnly" });
+    expect(screen.getByText("Read-only")).toBeInTheDocument();
+  });
+
+  it("marks a protected cluster", () => {
+    setup({ guard: "protected" });
+    expect(screen.getByText("Protected")).toBeInTheDocument();
+  });
+
+  it("changes the guard from the rail", async () => {
+    const { user, onGuardChange } = setup({ guard: "open" });
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /What this context allows/ }),
+      "readOnly",
+    );
+    expect(onGuardChange).toHaveBeenCalledWith("readOnly");
+  });
+});
 
 beforeEach(() => {
   listApiResources.mockReset();

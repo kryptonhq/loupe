@@ -67,6 +67,13 @@ export function isConflict(e: unknown): boolean {
   return isApiError(e) && e.kind === "conflict";
 }
 
+/// What a context allows, as recorded in Loupe's own settings.
+///
+/// Emphatically not RBAC: `readOnly` means the request was never sent,
+/// and the fix is in the user's preferences rather than in their
+/// permissions.
+export type Guard = "open" | "protected" | "readOnly";
+
 export function isApiError(e: unknown): e is ApiError {
   return (
     typeof e === "object" &&
@@ -454,6 +461,11 @@ export const api = {
   /// stored.
   setContextPinned: (context: string, pinned: boolean) =>
     invoke<Settings>("set_context_pinned", { context, pinned }),
+  /// The safeguard in force for a context, so the UI can mark it and
+  /// confirm before a write rather than only reporting the refusal.
+  contextGuard: (context: string) => invoke<Guard>("context_guard", { context }),
+  setContextGuard: (context: string, guard: Guard) =>
+    invoke<Settings>("set_context_guard", { context, guard }),
 
   /// Whether native window vibrancy actually took effect. Asked rather
   /// than inferred from the platform: support depends on OS build and,

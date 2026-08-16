@@ -51,6 +51,16 @@ pub struct Settings {
     /// recents because pinning is a deliberate statement and should not
     /// be pushed out by a day of connecting to something else.
     pub pinned_contexts: Vec<String>,
+
+    /// Contexts where writes are refused outright. See `crate::guard`.
+    pub read_only_contexts: Vec<String>,
+
+    /// Contexts where a write has to be confirmed by typing the name.
+    pub protected_contexts: Vec<String>,
+
+    /// Glob patterns marking contexts protected without naming each one
+    /// — `*prod*` covers six hundred clusters in one line.
+    pub protected_patterns: Vec<String>,
 }
 
 impl Settings {
@@ -70,6 +80,22 @@ impl Settings {
         self.pinned_contexts.retain(|c| c != context);
         if pinned {
             self.pinned_contexts.push(context.to_string());
+        }
+    }
+
+    /// Marks a context read-only, protected, or neither.
+    ///
+    /// Always removes it from both lists first, so a context can never
+    /// end up in two states at once and the setting means exactly what
+    /// the user last chose.
+    pub fn set_guard(&mut self, context: &str, guard: crate::guard::Guard) {
+        use crate::guard::Guard;
+        self.read_only_contexts.retain(|c| c != context);
+        self.protected_contexts.retain(|c| c != context);
+        match guard {
+            Guard::ReadOnly => self.read_only_contexts.push(context.to_string()),
+            Guard::Protected => self.protected_contexts.push(context.to_string()),
+            Guard::Open => {}
         }
     }
 }
@@ -226,6 +252,30 @@ mod tests {
         settings.set_pinned("b", true);
         settings.set_pinned("a", true);
         assert_eq!(settings.pinned_contexts, ["b", "a"]);
+    }
+
+    #[test]
+    fn a_context_is_never_in_two_guard_states_at_once() {
+        use crate::guard::Guard;
+        let mut settings = Settings::default();
+
+        settings.set_guard("prod", Guard::Protected);
+        settings.set_guard("prod", Guard::ReadOnly);
+        assert_eq!(settings.read_only_contexts, ["prod"]);
+        assert!(settings.protected_contexts.is_empty());
+
+        settings.set_guard("prod", Guard::Open);
+        assert!(settings.read_only_contexts.is_empty());
+        assert!(settings.protected_contexts.is_empty());
+    }
+
+    #[test]
+    fn setting_the_same_guard_twice_does_not_duplicate_it() {
+        use crate::guard::Guard;
+        let mut settings = Settings::default();
+        settings.set_guard("prod", Guard::ReadOnly);
+        settings.set_guard("prod", Guard::ReadOnly);
+        assert_eq!(settings.read_only_contexts, ["prod"]);
     }
 
     #[test]

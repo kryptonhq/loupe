@@ -50,6 +50,13 @@ pub enum AppError {
     #[error("save: {0}")]
     Export(String),
 
+    /// The write was refused locally, because the context is marked
+    /// read-only in Loupe. Its own kind because it is emphatically not
+    /// an RBAC denial: the cluster was never asked, and the fix is in
+    /// the user's own settings rather than in their permissions.
+    #[error("{0}")]
+    ReadOnly(String),
+
     /// The API server rejected or failed the request. Carries the
     /// original message so RBAC denials stay legible to the user.
     #[error("kubernetes: {0}")]
@@ -68,6 +75,7 @@ impl AppError {
             AppError::Conflict(_) => "conflict",
             AppError::Settings(_) => "settings",
             AppError::Export(_) => "export",
+            AppError::ReadOnly(_) => "read_only",
             AppError::Kube(_) => "kubernetes",
         }
     }
@@ -141,6 +149,7 @@ mod tests {
             (AppError::Conflict("x".into()), "conflict"),
             (AppError::Settings("x".into()), "settings"),
             (AppError::Export("x".into()), "export"),
+            (AppError::ReadOnly("x".into()), "read_only"),
             (AppError::Kube("x".into()), "kubernetes"),
         ];
 

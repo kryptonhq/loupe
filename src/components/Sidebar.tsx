@@ -5,7 +5,8 @@ import { dragRegionProps } from "../lib/window";
 import { KIND_SECTIONS, type KindEntry } from "../lib/kinds";
 import { ThemePicker } from "./ThemePicker";
 import type { Theme } from "../lib/theme";
-import { api, type ApiResourceInfo, type ClusterInfo } from "../lib/api";
+import { Select } from "./Select";
+import { api, type ApiResourceInfo, type ClusterInfo, type Guard } from "../lib/api";
 
 /// Which pane the main area is showing.
 ///
@@ -42,9 +43,36 @@ interface SidebarProps {
   onSelect: (v: View) => void;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  /// What the connected context allows, and how to change it. Shown
+  /// beside the cluster name rather than buried in a settings screen:
+  /// the whole value of the safeguard is that it is legible at a glance,
+  /// and in a screenshot.
+  guard: Guard;
+  onGuardChange: (guard: Guard) => void;
   onSwitchCluster: () => void;
   onDisconnect: () => void;
 }
+
+/// How each guard reads in the rail.
+const GUARD_LABEL: Record<Guard, string> = {
+  open: "Writable",
+  protected: "Protected",
+  readOnly: "Read-only",
+};
+
+const GUARD_TONE: Record<Guard, string> = {
+  open: "text-content-muted",
+  protected: "text-warn",
+  readOnly: "text-danger",
+};
+
+/// The dot beside the cluster name. Green for an ordinary cluster, and
+/// something you cannot miss for one you have marked.
+const GUARD_DOT: Record<Guard, string> = {
+  open: "bg-success shadow-[0_0_0_3px_rgb(var(--success)/0.15)]",
+  protected: "bg-warn shadow-[0_0_0_3px_rgb(var(--warn)/0.15)]",
+  readOnly: "bg-danger shadow-[0_0_0_3px_rgb(var(--danger)/0.15)]",
+};
 
 /// The kind a `kind` view is showing, or null for anything else.
 function selectedKindId(view: View) {
@@ -251,6 +279,8 @@ export function Sidebar({
   onSelect,
   theme,
   onThemeChange,
+  guard,
+  onGuardChange,
   onSwitchCluster,
   onDisconnect,
 }: SidebarProps) {
@@ -328,13 +358,22 @@ export function Sidebar({
             title={`${cluster.server}\nClick to switch cluster`}
             className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors duration-150 ease-swift hover:bg-content/[0.05]"
           >
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success shadow-[0_0_0_3px_rgb(var(--success)/0.15)]" />
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${GUARD_DOT[guard]}`}
+            />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-medium">
                 {cluster.context}
               </span>
               <span className="block truncate text-2xs text-content-muted">
-                {cluster.version}
+                {guard === "open" ? (
+                  cluster.version
+                ) : (
+                  // Replaces the version rather than sitting beside it:
+                  // on a cluster you have marked, this is the thing
+                  // worth reading.
+                  <span className={GUARD_TONE[guard]}>{GUARD_LABEL[guard]}</span>
+                )}
               </span>
             </span>
             <span className="shrink-0 text-xs text-content-muted transition-colors group-hover:text-content-secondary">
@@ -342,9 +381,22 @@ export function Sidebar({
             </span>
           </button>
 
+          <div className="mt-1 flex items-center gap-1.5 px-2">
+            <span className="shrink-0 text-2xs text-content-muted">Writes</span>
+            <Select
+              value={guard}
+              onChange={(v) => onGuardChange(v as Guard)}
+              title="What this context allows. Loupe's own safeguard, not RBAC — it does not change your permissions."
+            >
+              <option value="open">Allowed</option>
+              <option value="protected">Confirm each</option>
+              <option value="readOnly">Refused</option>
+            </Select>
+          </div>
+
           <button
             onClick={onDisconnect}
-            className="mt-0.5 w-full rounded px-2 py-1 text-left text-2xs text-content-muted transition-colors hover:bg-content/[0.05] hover:text-content-secondary"
+            className="mt-1 w-full rounded px-2 py-1 text-left text-2xs text-content-muted transition-colors hover:bg-content/[0.05] hover:text-content-secondary"
           >
             Disconnect
           </button>

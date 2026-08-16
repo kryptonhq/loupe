@@ -7,7 +7,8 @@ import { Namespaces, Nodes, Pods } from "./pages/Resources";
 import { Crds } from "./pages/Crds";
 import { KindBrowser } from "./pages/KindBrowser";
 import { Helm } from "./pages/Helm";
-import { api, type ClusterInfo } from "./lib/api";
+import { api, type ClusterInfo, type Guard } from "./lib/api";
+import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
 
 export default function App() {
@@ -23,6 +24,12 @@ export default function App() {
   // App owns the appearance: the picker sets it, the OS feeds into it
   // when the preference is "system", and one effect applies the result.
   const [theme, setTheme] = useState<Theme>("system");
+
+  // What the connected context allows. Held here because every write
+  // path needs it and none of the pages in between should have to carry
+  // it. `open` until told otherwise: a failure to read preferences must
+  // never silently lock someone out of their own cluster.
+  const [guard, setGuard] = useState<Guard>("open");
 
   const queryClient = useQueryClient();
 
@@ -45,6 +52,29 @@ export default function App() {
     system.addEventListener("change", paint);
     return () => system.removeEventListener("change", paint);
   }, [theme]);
+
+  useEffect(() => {
+    if (!cluster) {
+      setGuard("open");
+      return;
+    }
+    api
+      .contextGuard(cluster.context)
+      .then(setGuard)
+      .catch(() => setGuard("open"));
+  }, [cluster]);
+
+  async function chooseGuard(next: Guard) {
+    if (!cluster) return;
+    setGuard(next);
+    try {
+      await api.setContextGuard(cluster.context, next);
+    } catch {
+      // A safeguard that did not persist is worse than one that visibly
+      // failed to apply, so put it back.
+      await api.contextGuard(cluster.context).then(setGuard).catch(() => {});
+    }
+  }
 
   async function chooseTheme(next: Theme) {
     // Applied first: the click should feel instant, and a preference
@@ -98,26 +128,30 @@ export default function App() {
   }
 
   return (
-    <div className="ambient flex h-full">
-      <Sidebar
-        cluster={cluster}
-        view={view}
-        onSelect={setView}
-        theme={theme}
-        onThemeChange={chooseTheme}
-        onSwitchCluster={() => setSwitching(true)}
-        onDisconnect={disconnect}
-      />
-      <main className="min-w-0 flex-1">
-        {view.type === "nodes" && <Nodes />}
-        {view.type === "namespaces" && <Namespaces />}
-        {view.type === "pods" && <Pods />}
-        {view.type === "crds" && (
-          <Crds onSelectKind={(entry) => setView({ type: "kind", entry })} />
-        )}
-        {view.type === "kind" && <KindBrowser entry={view.entry} />}
-        {view.type === "helm" && <Helm />}
-      </main>
-    </div>
+    <ClusterContext.Provider value={{ context: cluster.context, guard }}>
+      <div className="ambient flex h-full">
+        <Sidebar
+          cluster={cluster}
+          view={view}
+          onSelect={setView}
+          theme={theme}
+          onThemeChange={chooseTheme}
+          guard={guard}
+          onGuardChange={chooseGuard}
+          onSwitchCluster={() => setSwitching(true)}
+          onDisconnect={disconnect}
+        />
+        <main className="min-w-0 flex-1">
+          {view.type === "nodes" && <Nodes />}
+          {view.type === "namespaces" && <Namespaces />}
+          {view.type === "pods" && <Pods />}
+          {view.type === "crds" && (
+            <Crds onSelectKind={(entry) => setView({ type: "kind", entry })} />
+          )}
+          {view.type === "kind" && <KindBrowser entry={view.entry} />}
+          {view.type === "helm" && <Helm />}
+        </main>
+      </div>
+    </ClusterContext.Provider>
   );
 }

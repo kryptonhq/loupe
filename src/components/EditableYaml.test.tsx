@@ -47,6 +47,14 @@ async function enterEditMode(user: ReturnType<typeof userEvent.setup>) {
   return screen.getByRole("textbox", { name: "Object YAML" });
 }
 
+/// Applying is now two steps: review the diff, then confirm. Almost
+/// every test here is about what happens after the request is sent, so
+/// they go through both rather than asserting on the panel each time.
+async function applyThrough(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+  await user.click(await screen.findByRole("button", { name: "Apply" }));
+}
+
 beforeEach(() => {
   applyYaml.mockReset();
 });
@@ -71,7 +79,9 @@ describe("EditableYaml", () => {
     const { user } = setup();
     await enterEditMode(user);
     // Nothing to write: it could only burn a resourceVersion.
-    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /Review & apply/ }),
+    ).toBeDisabled();
   });
 
   it("sends the edited text with the target it was opened on", async () => {
@@ -81,7 +91,7 @@ describe("EditableYaml", () => {
     const editor = await enterEditMode(user);
     await user.clear(editor);
     await user.type(editor, "edited: yes");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await applyThrough(user);
 
     await waitFor(() => expect(applyYaml).toHaveBeenCalledOnce());
     expect(applyYaml).toHaveBeenCalledWith(TARGET, "edited: yes");
@@ -94,7 +104,7 @@ describe("EditableYaml", () => {
 
     const editor = await enterEditMode(user);
     await user.type(editor, "extra: 1");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await applyThrough(user);
 
     await waitFor(() =>
       expect(screen.queryByRole("textbox")).not.toBeInTheDocument(),
@@ -112,7 +122,7 @@ describe("EditableYaml", () => {
 
     const editor = await enterEditMode(user);
     await user.type(editor, "extra: 1");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await applyThrough(user);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "cannot change the name here",
@@ -132,7 +142,7 @@ describe("EditableYaml", () => {
 
     const editor = await enterEditMode(user);
     await user.type(editor, "extra: 1");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await applyThrough(user);
 
     // A stale write is the one failure with an obvious next step.
     const discard = await screen.findByRole("button", {
@@ -150,7 +160,7 @@ describe("EditableYaml", () => {
 
     const editor = await enterEditMode(user);
     await user.type(editor, "extra: 1");
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await applyThrough(user);
 
     await screen.findByRole("alert");
     expect(
@@ -185,5 +195,134 @@ describe("EditableYaml", () => {
 
     expect(editor).toHaveFocus();
     expect(editor).toHaveValue("a:  ");
+  });
+
+  // The review step. Applying without looking is how outages start, and
+  // a full replace was previously sent on the strength of a button
+  // press.
+
+  it("shows what will change before sending anything", async () => {
+    const { user } = setup();
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    expect(await screen.findByText(/extra: 1/)).toBeInTheDocument();
+    expect(applyYaml).not.toHaveBeenCalled();
+  });
+
+  it("names the cluster in the confirmation, not just the object", async () => {
+    // Which cluster matters more than which object, and the sidebar is
+    // not where someone looks at the moment they press apply.
+    const { user } = setup({ context: "eks-prod-eu" });
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    expect(await screen.findByText("eks-prod-eu")).toBeInTheDocument();
+  });
+
+  it("goes back to the editor with the text intact", async () => {
+    const { user } = setup();
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    await user.click(await screen.findByRole("button", { name: "Back" }));
+
+    expect(screen.getByRole("textbox", { name: "Object YAML" })).toHaveValue(
+      SOURCE + "extra: 1",
+    );
+    expect(applyYaml).not.toHaveBeenCalled();
+  });
+
+  it("will not send an edit that only touches server-managed fields", async () => {
+    // Otherwise the user is asked to confirm a write that changes
+    // nothing, which teaches them to click through the confirmation.
+    const source = "metadata:\n  name: x\n  resourceVersion: \"1\"\n";
+    const { user } = setup({ source });
+
+    const editor = await enterEditMode(user);
+    await user.clear(editor);
+    await user.type(editor, 'metadata:\n  name: x\n  resourceVersion: "999"');
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    expect(await screen.findByText(/Nothing would change/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+  });
+
+  // Protection. RBAC is not this: plenty of people hold write permission
+  // on production and still do not want a stray click to use it.
+
+  it("offers no editor at all on a read-only context", async () => {
+    setup({ guard: "readOnly", context: "eks-prod-eu" });
+
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    // Said out loud, so the absence is legible rather than looking broken.
+    expect(screen.getByText("Read-only")).toBeInTheDocument();
+  });
+
+  it("requires the context name to be typed on a protected context", async () => {
+    const { user } = setup({ guard: "protected", context: "eks-prod-eu" });
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    const apply = await screen.findByRole("button", { name: "Apply" });
+    expect(apply).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("Type the context name to confirm"),
+      "eks-prod-eu",
+    );
+    expect(apply).toBeEnabled();
+  });
+
+  it("does not accept the wrong context name", async () => {
+    const { user } = setup({ guard: "protected", context: "eks-prod-eu" });
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    await user.type(
+      await screen.findByLabelText("Type the context name to confirm"),
+      "eks-prod-us",
+    );
+
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(applyYaml).not.toHaveBeenCalled();
+  });
+
+  it("asks for nothing extra on an unprotected context", async () => {
+    // The default has to stay exactly what it was for everyone who has
+    // not asked for this.
+    const { user } = setup({ guard: "open", context: "kind-local" });
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await user.click(screen.getByRole("button", { name: /Review & apply/ }));
+
+    expect(
+      screen.queryByLabelText("Type the context name to confirm"),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Apply" })).toBeEnabled();
+  });
+
+  it("surfaces a refusal from the backend even if the UI allowed it", async () => {
+    // The UI check is a courtesy; the backend check is the guarantee.
+    // If they ever disagree, the user must see why.
+    applyYaml.mockRejectedValue({
+      kind: "read_only",
+      message: "eks-prod-eu is marked read-only in Loupe. Nothing was sent.",
+    });
+    const { user } = setup({ context: "eks-prod-eu" });
+
+    const editor = await enterEditMode(user);
+    await user.type(editor, "extra: 1");
+    await applyThrough(user);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Nothing was sent",
+    );
   });
 });
