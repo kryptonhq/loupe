@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CommandPalette } from "./components/CommandPalette";
+import { ShortcutSheet } from "./components/ShortcutSheet";
+import { KIND_SECTIONS } from "./lib/kinds";
+import type { Command } from "./lib/palette";
 import { Sidebar, type View } from "./components/Sidebar";
 import { SkeletonBlock } from "./components/Skeleton";
 import { ContextPicker } from "./pages/ContextPicker";
@@ -30,6 +34,9 @@ export default function App() {
   // it. `open` until told otherwise: a failure to read preferences must
   // never silently lock someone out of their own cluster.
   const [guard, setGuard] = useState<Guard>("open");
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -63,6 +70,148 @@ export default function App() {
       .then(setGuard)
       .catch(() => setGuard("open"));
   }, [cluster]);
+
+  // Custom resources belong in the palette too — on a cluster with forty
+  // CRDs, hunting for one in the rail is exactly the mouse work this is
+  // meant to remove. Shared cache key with the sidebar, so opening the
+  // palette costs no extra discovery.
+  const apiResources = useQuery({
+    queryKey: ["api-resources"],
+    queryFn: () => api.listApiResources(),
+    staleTime: 5 * 60 * 1000,
+    enabled: cluster != null,
+  });
+
+  const contexts = useQuery({
+    queryKey: ["contexts"],
+    queryFn: () => api.listContexts(),
+    staleTime: 60 * 1000,
+  });
+
+  const commands: Command[] = useMemo(() => {
+    const out: Command[] = [];
+
+    const goTo = (label: string, view: View, hint?: string, keywords?: string) =>
+      out.push({
+        id: `view:${label}`,
+        group: "Go to",
+        label,
+        hint,
+        keywords,
+        run: () => setView(view),
+      });
+
+    goTo("Nodes", { type: "nodes" });
+    goTo("Namespaces", { type: "namespaces" }, undefined, "ns");
+    goTo("Pods", { type: "pods" });
+
+    for (const section of KIND_SECTIONS) {
+      for (const entry of section.items) {
+        goTo("" + entry.label, { type: "kind", entry }, section.title, entry.gvk.kind);
+      }
+    }
+
+    goTo("CRDs", { type: "crds" }, undefined, "custom resource definitions");
+    goTo("Helm", { type: "helm" }, undefined, "releases charts");
+
+    for (const resource of apiResources.data ?? []) {
+      if (!resource.custom) continue;
+      const entry = {
+        id: `${resource.group}/${resource.version}/${resource.kind}`,
+        label: resource.kind,
+        gvk: {
+          group: resource.group,
+          version: resource.version,
+          kind: resource.kind,
+        },
+      };
+      out.push({
+        id: `crd:${entry.id}`,
+        group: "Go to",
+        label: resource.kind,
+        hint: resource.group,
+        run: () => setView({ type: "kind", entry }),
+      });
+    }
+
+    // Switching cluster without the mouse is most of the point on a
+    // machine with more than one.
+    for (const ctx of contexts.data ?? []) {
+      if (ctx.name === cluster?.context) continue;
+      out.push({
+        id: `ctx:${ctx.name}`,
+        group: "Cluster",
+        label: ctx.name,
+        hint: ctx.cluster,
+        keywords: "switch context connect",
+        run: async () => {
+          try {
+            await api.connect(ctx.name);
+            await onConnected();
+          } catch {
+            // The picker is where connection failures are reported
+            // properly; opening it puts the error where it belongs.
+            setSwitching(true);
+          }
+        },
+      });
+    }
+
+    out.push({
+      id: "action:switch",
+      group: "Action",
+      label: "Switch cluster…",
+      keywords: "context change",
+      run: () => setSwitching(true),
+    });
+    out.push({
+      id: "action:disconnect",
+      group: "Action",
+      label: "Disconnect",
+      run: () => void disconnect(),
+    });
+    out.push({
+      id: "action:shortcuts",
+      group: "Action",
+      label: "Keyboard shortcuts",
+      keywords: "help keys",
+      run: () => setShortcutsOpen(true),
+    });
+    for (const next of ["system", "light", "dark"] as Theme[]) {
+      out.push({
+        id: `theme:${next}`,
+        group: "Action",
+        label: `Appearance: ${next}`,
+        keywords: "theme dark light",
+        run: () => void chooseTheme(next),
+      });
+    }
+
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiResources.data, contexts.data, cluster?.context]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+      // `?` only when not typing, or it cannot be typed into a filter.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (e.key === "?" && !typing) {
+        e.preventDefault();
+        setShortcutsOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   async function chooseGuard(next: Guard) {
     if (!cluster) return;
@@ -151,6 +300,16 @@ export default function App() {
           {view.type === "kind" && <KindBrowser entry={view.entry} />}
           {view.type === "helm" && <Helm />}
         </main>
+
+        {paletteOpen && (
+          <CommandPalette
+            commands={commands}
+            onClose={() => setPaletteOpen(false)}
+          />
+        )}
+        {shortcutsOpen && (
+          <ShortcutSheet onClose={() => setShortcutsOpen(false)} />
+        )}
       </div>
     </ClusterContext.Provider>
   );

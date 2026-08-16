@@ -176,7 +176,20 @@ describe("App cluster changes", () => {
 
     await waitFor(() => expect(disconnect).toHaveBeenCalledOnce());
     expect(await screen.findByText(/Choose a cluster/)).toBeInTheDocument();
-    expect(client.getQueryCache().getAll()).toHaveLength(0);
+
+    // No cluster data may survive, or rows from the cluster we just left
+    // flash under the next one's heading. Asserted on the data rather
+    // than on the entries: a still-mounted query re-registers an empty
+    // entry immediately, which is harmless. The kubeconfig's context
+    // list is not cluster data and is expected to stay — the picker and
+    // the command palette both need it.
+    const stale = client
+      .getQueryCache()
+      .getAll()
+      .filter((query) => query.queryKey[0] !== "contexts")
+      .filter((query) => query.state.data !== undefined)
+      .map((query) => query.queryKey);
+    expect(stale).toEqual([]);
   });
 
   it("lets a switch be cancelled back to the live cluster", async () => {
@@ -190,6 +203,105 @@ describe("App cluster changes", () => {
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+  });
+});
+
+// Keyboard-first navigation. The point is that a session can run
+// without the mouse, so these go through the keyboard.
+describe("App command palette", () => {
+  it("opens on the platform shortcut", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+  });
+
+  it("opens on Ctrl-K too", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Control>}k{/Control}");
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+  });
+
+  it("navigates to a kind without the mouse", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "helm");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(api.listHelmReleases).toHaveBeenCalled());
+    // And the palette gets out of the way of what it just opened.
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("offers the other contexts as somewhere to switch to", async () => {
+    listContexts.mockResolvedValue([
+      { name: "orbstack", cluster: "orbstack-k8s", user: "u", namespace: null, isCurrent: true },
+      { name: "eks-prod", cluster: "eks", user: "u", namespace: null, isCurrent: false },
+    ]);
+
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "eks-prod");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(api.connect).toHaveBeenCalledWith("eks-prod"));
+  });
+
+  it("does not offer the cluster already connected", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "orbstack");
+
+    // "orbstack" is the live context; switching to it is not a command.
+    expect(screen.queryByText("orbstack-k8s")).not.toBeInTheDocument();
+  });
+
+  it("closes on a second press of the shortcut", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await user.keyboard("{Meta>}k{/Meta}");
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Command palette" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("shows the shortcut sheet on ?", async () => {
+    // A shortcut nobody can find is a shortcut nobody uses.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("?");
+    expect(
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" }),
+    ).toBeInTheDocument();
+  });
+
+  it("lets ? be typed into a filter rather than opening the sheet", async () => {
+    // Otherwise no search box in the app can contain a question mark.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByPlaceholderText("Search…"));
+    await user.keyboard("?");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Keyboard shortcuts" }),
+    ).not.toBeInTheDocument();
   });
 });
 
