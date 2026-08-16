@@ -262,13 +262,33 @@ async fn serve(
         .take_stream(remote_port)
         .ok_or_else(|| AppError::Kube(format!("the pod is not listening on {remote_port}")))?;
 
-    let (mut local_read, mut local_write) = socket.split();
-    let (mut remote_read, mut remote_write) = tokio::io::split(&mut upstream);
+    let moved = splice(&mut socket, &mut upstream).await;
+    bytes.fetch_add(moved, Ordering::Relaxed);
 
-    // Both directions at once, and the connection is over when either
-    // side closes — a half-open forward reads as a hang.
+    // Joining lets kube close the websocket rather than leaving it
+    // half-shut, which the API server eventually reaps but noisily.
+    let _ = forwarder.join().await;
+    Ok(())
+}
+
+/// Copies bytes both ways until either side closes, returning the total
+/// moved.
+///
+/// Split from `serve` and written against any pair of streams so it can
+/// be tested without a cluster or a socket. Both directions run at once
+/// and the connection is over when either finishes — a half-open forward
+/// reads to the user as a hang rather than as a closed connection.
+pub(crate) async fn splice(
+    local: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
+    remote: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
+) -> u64 {
+    let (mut local_read, mut local_write) = tokio::io::split(local);
+    let (mut remote_read, mut remote_write) = tokio::io::split(remote);
+
     let to_remote = async {
         let moved = tokio::io::copy(&mut local_read, &mut remote_write).await;
+        // Shut down rather than just stopping: the far side needs to see
+        // end-of-stream, or a protocol that waits for it hangs.
         let _ = remote_write.shutdown().await;
         moved
     };
@@ -279,12 +299,33 @@ async fn serve(
     };
 
     let (sent, received) = tokio::join!(to_remote, to_local);
-    bytes.fetch_add(sent.unwrap_or(0) + received.unwrap_or(0), Ordering::Relaxed);
+    sent.unwrap_or(0) + received.unwrap_or(0)
+}
 
-    // Joining lets kube close the websocket rather than leaving it
-    // half-shut, which the API server eventually reaps but noisily.
-    let _ = forwarder.join().await;
-    Ok(())
+/// The selector a Service's pods carry, in the API server's own syntax.
+///
+/// Split out because it is the part with a decision in it: a Service
+/// with no selector is backed by manually managed Endpoints and has no
+/// pods to forward to, which is a real answer rather than an error to
+/// paper over.
+pub(crate) fn service_selector(service: &Service, name: &str) -> Result<String> {
+    let selector = service
+        .spec
+        .as_ref()
+        .and_then(|s| s.selector.as_ref())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Kube(format!(
+                "{name} has no selector, so it has no pods to forward to — \
+                 it is backed by manually managed Endpoints"
+            ))
+        })?;
+
+    let mut pairs: Vec<String> = selector.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    // Sorted so the same Service always produces the same expression,
+    // which keeps it comparable in logs and in tests.
+    pairs.sort();
+    Ok(pairs.join(","))
 }
 
 /// The pod a forward should reach right now.
@@ -300,23 +341,7 @@ async fn resolve_pod(client: &kube::Client, target: &ForwardTarget) -> Result<St
             let services: Api<Service> = Api::namespaced(client.clone(), namespace);
             let service = services.get(name).await?;
 
-            let selector = service
-                .spec
-                .as_ref()
-                .and_then(|s| s.selector.as_ref())
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| {
-                    AppError::Kube(format!(
-                        "{name} has no selector, so it has no pods to forward to — \
-                         it is backed by manually managed Endpoints"
-                    ))
-                })?;
-
-            let expression = selector
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(",");
+            let expression = service_selector(&service, name)?;
 
             let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
             let matching = pods
@@ -394,6 +419,103 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(AppError::NotConnected)));
+    }
+
+    fn service_with(selector: &[(&str, &str)]) -> Service {
+        Service {
+            spec: Some(k8s_openapi::api::core::v1::ServiceSpec {
+                selector: if selector.is_empty() {
+                    None
+                } else {
+                    Some(
+                        selector
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                    )
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_services_selector_becomes_a_label_expression() {
+        let expression = service_selector(&service_with(&[("app", "api"), ("tier", "web")]), "api")
+            .expect("a selector");
+        assert_eq!(expression, "app=api,tier=web");
+    }
+
+    #[test]
+    fn the_expression_is_stable_for_the_same_service() {
+        // Sorted, so it is comparable in a log line and in a test rather
+        // than depending on map iteration order.
+        let a = service_selector(&service_with(&[("b", "2"), ("a", "1")]), "x").unwrap();
+        let b = service_selector(&service_with(&[("a", "1"), ("b", "2")]), "x").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_service_with_no_selector_says_why_it_cannot_be_forwarded() {
+        // Backed by manually managed Endpoints. A real answer, and one
+        // the user can act on — not a hang while nothing resolves.
+        let err = service_selector(&service_with(&[]), "legacy").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("no selector"), "got {message}");
+        assert!(message.contains("Endpoints"), "got {message}");
+    }
+
+    #[tokio::test]
+    async fn bytes_move_in_both_directions() {
+        // The forward's whole job. Both halves at once, because a
+        // request and its response overlap on any real connection.
+        let (mut client, mut local) = tokio::io::duplex(1024);
+        let (mut remote, mut server) = tokio::io::duplex(1024);
+
+        let client_side = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            client.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+            client.shutdown().await.unwrap();
+            let mut got = Vec::new();
+            client.read_to_end(&mut got).await.unwrap();
+            got
+        });
+
+        let server_side = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut got = Vec::new();
+            server.read_to_end(&mut got).await.unwrap();
+            server.write_all(b"HTTP/1.1 200 OK").await.unwrap();
+            server.shutdown().await.unwrap();
+            got
+        });
+
+        let moved = splice(&mut local, &mut remote).await;
+
+        let received_by_server = server_side.await.unwrap();
+        let received_by_client = client_side.await.unwrap();
+
+        assert_eq!(received_by_server, b"GET / HTTP/1.1\r\n\r\n");
+        assert_eq!(received_by_client, b"HTTP/1.1 200 OK");
+        // Counted both ways, which is what makes an idle forward
+        // distinguishable from a broken one in the panel.
+        assert_eq!(
+            moved as usize,
+            received_by_server.len() + received_by_client.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_sends_nothing_still_completes() {
+        // A port scan, or a client that connects and gives up. It must
+        // not leave the forward holding a half-open connection.
+        let (client, mut local) = tokio::io::duplex(64);
+        let (mut remote, server) = tokio::io::duplex(64);
+        drop(client);
+        drop(server);
+
+        assert_eq!(splice(&mut local, &mut remote).await, 0);
     }
 
     #[tokio::test]

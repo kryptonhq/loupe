@@ -131,38 +131,14 @@ pub async fn start(
         futures::pin_mut!(stream);
 
         while let Some(event) = stream.next().await {
-            let sent = match event {
-                // The initial list. Not reported per object: the caller
-                // already has the listing it opened with, and replaying
-                // 8,000 objects at it as individual changes would be
-                // exactly the cost this exists to avoid.
-                Ok(watcher::Event::Init) | Ok(watcher::Event::InitApply(_)) => true,
-                Ok(watcher::Event::InitDone) => true,
-
-                Ok(watcher::Event::Apply(object)) => sink.send(WatchEvent::Changed {
-                    change: Change::Applied,
-                    name: object.name_any(),
-                    namespace: object.namespace(),
-                }),
-                Ok(watcher::Event::Delete(object)) => sink.send(WatchEvent::Changed {
-                    change: Change::Deleted,
-                    name: object.name_any(),
-                    namespace: object.namespace(),
-                }),
-
-                Err(watcher::Error::WatchFailed(_) | watcher::Error::InitialListFailed(_)) => {
-                    // Recoverable: the watcher relists and carries on, so
-                    // anything cached from before is suspect but the
-                    // watch itself is fine.
-                    sink.send(WatchEvent::Reset)
+            match translate(event) {
+                // Nothing worth telling the frontend about.
+                None => continue,
+                Some(event) => {
+                    if !sink.send(event) {
+                        break;
+                    }
                 }
-                Err(e) => sink.send(WatchEvent::Failed {
-                    message: e.to_string(),
-                }),
-            };
-
-            if !sent {
-                break;
             }
         }
 
@@ -171,6 +147,48 @@ pub async fn start(
 
     watches.active.lock().await.insert(id, task.abort_handle());
     Ok(id)
+}
+
+/// Turns one watcher event into something the frontend can act on, or
+/// None when there is nothing worth saying.
+///
+/// Split from the loop because this is where all the judgement is: which
+/// events are worth a round trip, which mean "refetch", and which mean
+/// "this view has stopped updating". Testing it needs no cluster.
+pub(crate) fn translate(
+    event: std::result::Result<watcher::Event<DynamicObject>, watcher::Error>,
+) -> Option<WatchEvent> {
+    match event {
+        // The initial list. Deliberately silent: the caller already has
+        // the listing it opened with, and replaying 8,000 objects at it
+        // as individual changes is exactly the cost this exists to
+        // avoid.
+        Ok(watcher::Event::Init)
+        | Ok(watcher::Event::InitApply(_))
+        | Ok(watcher::Event::InitDone) => None,
+
+        Ok(watcher::Event::Apply(object)) => Some(WatchEvent::Changed {
+            change: Change::Applied,
+            name: object.name_any(),
+            namespace: object.namespace(),
+        }),
+        Ok(watcher::Event::Delete(object)) => Some(WatchEvent::Changed {
+            change: Change::Deleted,
+            name: object.name_any(),
+            namespace: object.namespace(),
+        }),
+
+        // Recoverable: the watcher relists and carries on, so anything
+        // cached from before is suspect while the watch itself is fine.
+        // Distinct from a failure, because conflating them either hides
+        // a dead watch or makes every relist look like a fault.
+        Err(watcher::Error::WatchFailed(_) | watcher::Error::InitialListFailed(_)) => {
+            Some(WatchEvent::Reset)
+        }
+        Err(e) => Some(WatchEvent::Failed {
+            message: e.to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +204,66 @@ mod tests {
 
     fn watches() -> &'static Watches {
         Box::leak(Box::new(Watches::default()))
+    }
+
+    fn object(name: &str, namespace: Option<&str>) -> DynamicObject {
+        let mut o = DynamicObject::new(
+            name,
+            &kube::core::ApiResource::erase::<k8s_openapi::api::core::v1::Pod>(&()),
+        );
+        o.metadata.namespace = namespace.map(|n| n.to_string());
+        o
+    }
+
+    #[test]
+    fn the_initial_list_is_not_replayed_as_changes() {
+        // Replaying 8,000 objects at a caller that already has the
+        // listing is exactly the cost the watch exists to avoid.
+        assert!(translate(Ok(watcher::Event::Init)).is_none());
+        assert!(translate(Ok(watcher::Event::InitApply(object("api", None)))).is_none());
+        assert!(translate(Ok(watcher::Event::InitDone)).is_none());
+    }
+
+    #[test]
+    fn an_applied_object_is_reported_with_its_identity() {
+        let event = translate(Ok(watcher::Event::Apply(object(
+            "api-7d9",
+            Some("payments"),
+        ))));
+        match event {
+            Some(WatchEvent::Changed {
+                change,
+                name,
+                namespace,
+            }) => {
+                assert_eq!(change, Change::Applied);
+                assert_eq!(name, "api-7d9");
+                assert_eq!(namespace.as_deref(), Some("payments"));
+            }
+            other => panic!("expected a change, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_deleted_object_is_distinguished_from_an_applied_one() {
+        // The frontend refetches either way, but a listing that cannot
+        // tell a deletion from an update cannot ever do better.
+        let event = translate(Ok(watcher::Event::Delete(object("api-7d9", None))));
+        match event {
+            Some(WatchEvent::Changed { change, .. }) => {
+                assert_eq!(change, Change::Deleted)
+            }
+            other => panic!("expected a change, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_cluster_scoped_object_reports_no_namespace() {
+        let event = translate(Ok(watcher::Event::Apply(object("worker-1", None))));
+        match event {
+            Some(WatchEvent::Changed { namespace, .. }) => assert!(namespace.is_none()),
+            other => panic!("expected a change, got {other:?}"),
+        }
     }
 
     #[tokio::test]

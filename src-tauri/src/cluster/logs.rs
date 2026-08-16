@@ -30,7 +30,7 @@ use crate::error::Result;
 /// Tagged so the frontend can distinguish a line from the stream ending,
 /// including when it ends because of an error — a log view that simply
 /// stops producing lines is indistinguishable from a quiet pod.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum LogEvent {
     /// A batch of lines, oldest first.
@@ -342,19 +342,15 @@ pub async fn stream_merged(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
-            if known.len() > MAX_MERGED_STREAMS
-                && !sink.send(LogEvent::Capped {
-                    streaming: MAX_MERGED_STREAMS,
-                    matched: known.len(),
-                })
-            {
-                break;
+            let plan = plan_streams(&known, running.keys());
+
+            if let Some(capped) = plan.capped {
+                if !sink.send(capped) {
+                    break;
+                }
             }
 
-            for pod in known.iter().take(MAX_MERGED_STREAMS) {
-                if running.contains_key(pod) {
-                    continue;
-                }
+            for pod in &plan.start {
                 if !sink.send(LogEvent::PodStarted { pod: pod.clone() }) {
                     break;
                 }
@@ -365,13 +361,11 @@ pub async fn stream_merged(
             // Pods that have gone stop being tracked, so a replica with
             // the same name later gets a fresh stream rather than being
             // mistaken for the one that died.
-            running.retain(|pod, handle| {
-                if known.contains(pod) {
-                    return true;
+            for pod in &plan.stop {
+                if let Some(handle) = running.remove(pod) {
+                    handle.abort();
                 }
-                handle.abort();
-                false
-            });
+            }
 
             ticker.tick().await;
 
@@ -393,6 +387,49 @@ pub async fn stream_merged(
 
     streams.register(id, task.abort_handle()).await;
     Ok(id)
+}
+
+/// Which streams to open and which to drop on this pass.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct StreamPlan {
+    pub start: Vec<String>,
+    pub stop: Vec<String>,
+    /// Set when more pods match than will be streamed.
+    pub capped: Option<LogEvent>,
+}
+
+/// Works out what a merged view should do about the pods it can see.
+///
+/// Split from the loop because this is the whole of the churn logic:
+/// which replicas are new, which have gone, and whether the cap has
+/// bitten. None of it needs a cluster to decide, and all of it is easy
+/// to get subtly wrong during a rollout.
+pub(crate) fn plan_streams<'a>(
+    matched: &[String],
+    running: impl Iterator<Item = &'a String>,
+) -> StreamPlan {
+    let running: std::collections::HashSet<&String> = running.collect();
+    let streaming: Vec<&String> = matched.iter().take(MAX_MERGED_STREAMS).collect();
+
+    StreamPlan {
+        start: streaming
+            .iter()
+            .filter(|pod| !running.contains(**pod))
+            .map(|pod| (*pod).clone())
+            .collect(),
+        // Anything running that is no longer among the pods being
+        // streamed — either gone from the cluster, or pushed out of the
+        // cap by something else.
+        stop: running
+            .iter()
+            .filter(|pod| !streaming.contains(pod))
+            .map(|pod| (*pod).clone())
+            .collect(),
+        capped: (matched.len() > MAX_MERGED_STREAMS).then_some(LogEvent::Capped {
+            streaming: MAX_MERGED_STREAMS,
+            matched: matched.len(),
+        }),
+    }
 }
 
 /// Pod names matching a selector, sorted so the view is stable.
@@ -686,6 +723,94 @@ mod tests {
             stream_merged(&session, streams(), opts, sink).await,
             Err(crate::error::AppError::NotConnected)
         ));
+    }
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| v.to_string()).collect()
+    }
+
+    #[test]
+    fn the_first_pass_starts_every_matching_pod() {
+        let plan = plan_streams(&names(&["api-a", "api-b"]), std::iter::empty());
+        assert_eq!(plan.start, names(&["api-a", "api-b"]));
+        assert!(plan.stop.is_empty());
+        assert!(plan.capped.is_none());
+    }
+
+    #[test]
+    fn a_pod_already_streaming_is_not_started_again() {
+        // Otherwise every three-second pass opens a second connection to
+        // every pod already being read.
+        let running = names(&["api-a"]);
+        let plan = plan_streams(&names(&["api-a", "api-b"]), running.iter());
+
+        assert_eq!(plan.start, names(&["api-b"]));
+        assert!(plan.stop.is_empty());
+    }
+
+    #[test]
+    fn a_replica_that_went_away_is_stopped() {
+        // A rollout replaces pods constantly; a stream left running
+        // against a pod that no longer exists is a leaked connection.
+        let running = names(&["api-old"]);
+        let plan = plan_streams(&names(&["api-new"]), running.iter());
+
+        assert_eq!(plan.start, names(&["api-new"]));
+        assert_eq!(plan.stop, names(&["api-old"]));
+    }
+
+    #[test]
+    fn a_rollout_swaps_both_at_once() {
+        let running = names(&["api-old"]);
+        let plan = plan_streams(&names(&["api-old", "api-new"]), running.iter());
+
+        // The old one keeps its stream while the new one joins — during
+        // a rollout both are producing output worth reading.
+        assert_eq!(plan.start, names(&["api-new"]));
+        assert!(plan.stop.is_empty());
+    }
+
+    #[test]
+    fn nothing_changes_when_nothing_changed() {
+        // The steady state, which is most passes. It must produce no
+        // work at all rather than churning streams every interval.
+        let running = names(&["api-a", "api-b"]);
+        let plan = plan_streams(&names(&["api-a", "api-b"]), running.iter());
+
+        assert!(plan.start.is_empty());
+        assert!(plan.stop.is_empty());
+    }
+
+    #[test]
+    fn the_cap_bites_and_says_so() {
+        // Logging a DaemonSet on a large cluster must not open a
+        // connection per node, and a view quietly missing half the
+        // replicas is worse than one that admits it.
+        let matched: Vec<String> = (0..500).map(|i| format!("pod-{i}")).collect();
+        let plan = plan_streams(&matched, std::iter::empty());
+
+        assert_eq!(plan.start.len(), MAX_MERGED_STREAMS);
+        assert_eq!(
+            plan.capped,
+            Some(LogEvent::Capped {
+                streaming: MAX_MERGED_STREAMS,
+                matched: 500,
+            })
+        );
+    }
+
+    #[test]
+    fn a_pod_pushed_out_of_the_cap_is_stopped() {
+        // Otherwise the cap bounds what is started and not what is
+        // running, and the count creeps past it over time.
+        let matched: Vec<String> = (0..MAX_MERGED_STREAMS + 5)
+            .map(|i| format!("pod-{i}"))
+            .collect();
+        let running = names(&["pod-999"]);
+        let plan = plan_streams(&matched, running.iter());
+
+        assert_eq!(plan.stop, names(&["pod-999"]));
+        assert_eq!(plan.start.len(), MAX_MERGED_STREAMS);
     }
 
     #[test]

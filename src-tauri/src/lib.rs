@@ -351,14 +351,8 @@ async fn drain_node(
 }
 
 /// Refuses a write when the connected context is marked read-only.
-///
-/// Not connected is left to the operation itself to report — it has a
-/// better error for it than this does.
 async fn guard_writes(app: &tauri::AppHandle, session: &cluster::Session) -> Result<()> {
-    let Some(info) = session.info().await else {
-        return Ok(());
-    };
-    guard::ensure_writable(&settings::load(app), &info.context)
+    guard::ensure_session_writable(&settings::load(app), session.info().await.as_ref())
 }
 
 /// The guard in force for a context, so the UI can mark it and confirm

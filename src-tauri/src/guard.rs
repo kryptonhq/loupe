@@ -119,6 +119,25 @@ pub fn ensure_writable(settings: &Settings, context: &str) -> Result<()> {
     )))
 }
 
+/// Refuses a write for whichever context a session is on.
+///
+/// Lives here rather than in the command layer so it can be tested: the
+/// commands are thin wrappers that need a Tauri app handle and a
+/// cluster, and this is the one decision among them worth covering.
+///
+/// A session with nothing connected is allowed through deliberately —
+/// the operation itself reports "not connected", and it has a better
+/// error for that than this does.
+pub fn ensure_session_writable(
+    settings: &Settings,
+    info: Option<&crate::cluster::ClusterInfo>,
+) -> Result<()> {
+    match info {
+        Some(info) => ensure_writable(settings, &info.context),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +183,37 @@ mod tests {
     fn read_only_wins_when_a_context_is_marked_both() {
         let s = settings(&["prod"], &["prod"], &[]);
         assert_eq!(guard_for(&s, "prod"), Guard::ReadOnly);
+    }
+
+    fn connected(context: &str) -> crate::cluster::ClusterInfo {
+        crate::cluster::ClusterInfo {
+            context: context.to_string(),
+            server: "https://example:6443".into(),
+            version: "v1.33.1".into(),
+            platform: "linux/arm64".into(),
+        }
+    }
+
+    #[test]
+    fn a_session_on_a_read_only_context_refuses_writes() {
+        let s = settings(&["prod"], &[], &[]);
+        let err = ensure_session_writable(&s, Some(&connected("prod"))).unwrap_err();
+        assert!(err.to_string().contains("Nothing was sent"));
+    }
+
+    #[test]
+    fn a_session_on_an_unmarked_context_writes_freely() {
+        let s = settings(&["prod"], &[], &[]);
+        assert!(ensure_session_writable(&s, Some(&connected("staging"))).is_ok());
+    }
+
+    #[test]
+    fn a_session_with_nothing_connected_is_left_to_the_operation() {
+        // "Not connected" is a better error than "read-only", and the
+        // operation itself has it. Refusing here would replace a precise
+        // message with a misleading one.
+        let s = settings(&["prod"], &[], &[]);
+        assert!(ensure_session_writable(&s, None).is_ok());
     }
 
     #[test]

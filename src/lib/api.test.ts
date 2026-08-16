@@ -3,7 +3,7 @@
 import libRs from "../../src-tauri/src/lib.rs?raw";
 import apiTs from "./api.ts?raw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { api, errorMessage, isApiError, isConflict } from "./api";
 
 // Two things are covered here.
@@ -216,5 +216,146 @@ describe("the command list agrees with the Rust side", () => {
     expect(unused, `registered but never called: ${unused.join(", ")}`).toEqual(
       [],
     );
+  });
+});
+
+// The commands added for 0.1.5. Same reasoning as the block above:
+// Tauri matches arguments by name, so a wrapper that sends `{ ns }`
+// where Rust declares `namespace` compiles on both sides and fails at
+// runtime with a null nobody expected.
+describe("0.1.5 command arguments", () => {
+  const resource = { group: "apps", version: "v1", kind: "Deployment" };
+  const channel = new Channel();
+
+  it("names the arguments for the operator actions", async () => {
+    await api.scaleObject(resource, "payments", "api", 5);
+    expect(lastCall()).toEqual({
+      command: "scale_object",
+      args: { resource, namespace: "payments", name: "api", replicas: 5 },
+    });
+
+    await api.rolloutRestart(resource, "payments", "api");
+    expect(lastCall()).toEqual({
+      command: "rollout_restart",
+      args: { resource, namespace: "payments", name: "api" },
+    });
+
+    await api.deleteObject(resource, "payments", "api");
+    expect(lastCall()).toEqual({
+      command: "delete_object",
+      args: { resource, namespace: "payments", name: "api" },
+    });
+
+    await api.setNodeSchedulable("worker-1", false);
+    expect(lastCall()).toEqual({
+      command: "set_node_schedulable",
+      args: { node: "worker-1", schedulable: false },
+    });
+
+    await api.drainNode("worker-1", channel);
+    expect(lastCall()).toEqual({
+      command: "drain_node",
+      args: { node: "worker-1", channel },
+    });
+  });
+
+  it("names the arguments for exec", async () => {
+    const options = {
+      namespace: "payments",
+      pod: "api-7d9",
+      container: "app",
+      shell: null,
+    };
+    await api.startExec(options, channel);
+    expect(lastCall()).toEqual({ command: "start_exec", args: { options, channel } });
+
+    await api.writeExec(1, "ls\n");
+    expect(lastCall()).toEqual({ command: "write_exec", args: { id: 1, data: "ls\n" } });
+
+    await api.resizeExec(1, 120, 40);
+    expect(lastCall()).toEqual({
+      command: "resize_exec",
+      args: { id: 1, width: 120, height: 40 },
+    });
+
+    await api.closeExec(1);
+    expect(lastCall()).toEqual({ command: "close_exec", args: { id: 1 } });
+  });
+
+  it("names the arguments for port forwarding", async () => {
+    const target = { kind: "pod" as const, namespace: "payments", name: "api-7d9" };
+    await api.startForward(target, 18080, 8080);
+    expect(lastCall()).toEqual({
+      command: "start_forward",
+      args: { target, localPort: 18080, remotePort: 8080 },
+    });
+
+    await api.listForwards();
+    expect(lastCall().command).toBe("list_forwards");
+
+    await api.stopForward(3);
+    expect(lastCall()).toEqual({ command: "stop_forward", args: { id: 3 } });
+  });
+
+  it("names the arguments for watching and merged logs", async () => {
+    await api.startWatch(resource, "payments", channel);
+    expect(lastCall()).toEqual({
+      command: "start_watch",
+      args: { resource, namespace: "payments", channel },
+    });
+
+    await api.stopWatch(2);
+    expect(lastCall()).toEqual({ command: "stop_watch", args: { id: 2 } });
+
+    const options = {
+      namespace: "payments",
+      selector: "app=api",
+      container: null,
+      tailLines: 500,
+      timestamps: false,
+    };
+    await api.startMergedLogs(options, channel);
+    expect(lastCall()).toEqual({
+      command: "start_merged_logs",
+      args: { options, channel },
+    });
+  });
+
+  it("names the arguments for the guards, related objects and saving", async () => {
+    await api.contextGuard("prod");
+    expect(lastCall()).toEqual({ command: "context_guard", args: { context: "prod" } });
+
+    await api.setContextGuard("prod", "readOnly");
+    expect(lastCall()).toEqual({
+      command: "set_context_guard",
+      args: { context: "prod", guard: "readOnly" },
+    });
+
+    await api.setContextPinned("prod", true);
+    expect(lastCall()).toEqual({
+      command: "set_context_pinned",
+      args: { context: "prod", pinned: true },
+    });
+
+    await api.listRelated(resource, "payments", "api");
+    expect(lastCall()).toEqual({
+      command: "list_related",
+      args: { resource, namespace: "payments", name: "api" },
+    });
+
+    await api.saveText("pod.log", "contents");
+    expect(lastCall()).toEqual({
+      command: "save_text",
+      args: { suggestedName: "pod.log", contents: "contents" },
+    });
+
+    await api.connectedClusters();
+    expect(lastCall().command).toBe("connected_clusters");
+
+    await api.disconnectContext("prod");
+    expect(lastCall()).toEqual({
+      command: "disconnect_context",
+      args: { context: "prod" },
+    });
   });
 });

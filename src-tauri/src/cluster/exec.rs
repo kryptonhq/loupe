@@ -250,30 +250,7 @@ pub async fn start(
     });
 
     let task = tokio::spawn(async move {
-        let mut buffer = [0u8; 8192];
-        loop {
-            match stdout.read(&mut buffer).await {
-                Ok(0) => {
-                    sink.send(ExecEvent::Ended);
-                    break;
-                }
-                Ok(read) => {
-                    // Lossy on purpose: a terminal emits arbitrary bytes
-                    // and a partial UTF-8 sequence at a buffer boundary
-                    // must not kill the session.
-                    let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
-                    if !sink.send(ExecEvent::Output { data: text }) {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    sink.send(ExecEvent::Failed {
-                        message: e.to_string(),
-                    });
-                    break;
-                }
-            }
-        }
+        pump_output(&mut stdout, &sink).await;
         // Dropped before joining. Holding a reader that nobody is
         // draining any more would block the background task on a full
         // buffer while `join` waits for that same task — the deadlock
@@ -294,6 +271,42 @@ pub async fn start(
     );
 
     Ok(id)
+}
+
+/// Forwards a terminal's output to the sink until it ends.
+///
+/// Split from `start` and written against any reader so it can be tested
+/// without a cluster. It is also where the interesting decisions live:
+/// what an empty read means, what a partial UTF-8 sequence at a buffer
+/// boundary means, and when to stop.
+pub(crate) async fn pump_output(
+    stdout: &mut (impl tokio::io::AsyncRead + Unpin),
+    sink: &impl ExecSink,
+) {
+    let mut buffer = [0u8; 8192];
+    loop {
+        match stdout.read(&mut buffer).await {
+            Ok(0) => {
+                sink.send(ExecEvent::Ended);
+                return;
+            }
+            Ok(read) => {
+                // Lossy on purpose: a terminal emits arbitrary bytes, and
+                // a multi-byte character split across two reads must not
+                // kill the session.
+                let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                if !sink.send(ExecEvent::Output { data: text }) {
+                    return;
+                }
+            }
+            Err(e) => {
+                sink.send(ExecEvent::Failed {
+                    message: e.to_string(),
+                });
+                return;
+            }
+        }
+    }
 }
 
 /// Finds a shell the image actually has.
@@ -536,6 +549,120 @@ mod tests {
         // almost every image actually has.
         assert_eq!(SHELLS[0], "/bin/bash");
         assert_eq!(SHELLS[1], "/bin/sh");
+    }
+
+    /// Records what the webview would have received.
+    #[derive(Clone, Default)]
+    struct Collect(std::sync::Arc<std::sync::Mutex<Vec<ExecEvent>>>);
+
+    impl ExecSink for Collect {
+        fn send(&self, event: ExecEvent) -> bool {
+            self.0.lock().unwrap().push(event);
+            true
+        }
+    }
+
+    impl Collect {
+        fn output(&self) -> String {
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    ExecEvent::Output { data } => Some(data.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn events(&self) -> Vec<ExecEvent> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn output_reaches_the_sink() {
+        let sink = Collect::default();
+        let mut stdout = std::io::Cursor::new(b"total 0\ndrwxr-xr-x app\n".to_vec());
+
+        pump_output(&mut stdout, &sink).await;
+
+        assert!(sink.output().contains("drwxr-xr-x app"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_read_ends_the_session() {
+        // EOF is the shell exiting. Reported explicitly, because a view
+        // that simply stops producing output is indistinguishable from
+        // one waiting at a prompt.
+        let sink = Collect::default();
+        let mut stdout = std::io::Cursor::new(Vec::new());
+
+        pump_output(&mut stdout, &sink).await;
+
+        assert!(matches!(sink.events().last(), Some(ExecEvent::Ended)));
+    }
+
+    #[tokio::test]
+    async fn a_character_split_across_two_reads_does_not_kill_the_session() {
+        // A terminal emits arbitrary bytes and reads land wherever the
+        // buffer boundary falls. Decoding strictly would end a session
+        // mid-word the first time someone printed a non-ASCII character.
+        let sink = Collect::default();
+        // The two halves of a single UTF-8 'é', delivered separately.
+        let mut stdout = tokio::io::AsyncReadExt::chain(
+            std::io::Cursor::new(vec![0xC3]),
+            std::io::Cursor::new(vec![0xA9]),
+        );
+
+        pump_output(&mut stdout, &sink).await;
+
+        // Lossy, so the halves render as replacement characters rather
+        // than ending the stream — and Ended still arrives normally.
+        assert!(matches!(sink.events().last(), Some(ExecEvent::Ended)));
+        assert!(!sink.output().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_read_error_is_reported_rather_than_swallowed() {
+        struct Broken;
+        impl tokio::io::AsyncRead for Broken {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                _: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Err(std::io::Error::other("connection reset")))
+            }
+        }
+
+        let sink = Collect::default();
+        pump_output(&mut Broken, &sink).await;
+
+        match sink.events().last() {
+            Some(ExecEvent::Failed { message }) => {
+                assert!(message.contains("connection reset"))
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn output_stops_when_the_view_goes_away() {
+        // A closed terminal must stop the read loop rather than keep
+        // draining an open connection to the API server into nowhere.
+        struct Closed;
+        impl ExecSink for Closed {
+            fn send(&self, _: ExecEvent) -> bool {
+                false
+            }
+        }
+
+        let mut stdout = std::io::Cursor::new(vec![b'x'; 64 * 1024]);
+        pump_output(&mut stdout, &Closed).await;
+
+        // Returned rather than looping to the end of a 64KB buffer.
+        assert!(stdout.position() < 64 * 1024);
     }
 
     #[tokio::test]
