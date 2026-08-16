@@ -494,6 +494,13 @@ export const api = {
   listContexts: () => invoke<ContextInfo[]>("list_contexts"),
   connect: (context: string) => invoke<ClusterInfo>("connect", { context }),
   currentCluster: () => invoke<ClusterInfo | null>("current_cluster"),
+  /// Every cluster connected this session, active one first. Switching
+  /// to one of these costs nothing: its client and its API discovery
+  /// are still held.
+  connectedClusters: () => invoke<ClusterInfo[]>("connected_clusters"),
+  /// Drops one cluster's connection without leaving the others.
+  disconnectContext: (context: string) =>
+    invoke<void>("disconnect_context", { context }),
   disconnect: () => invoke<void>("disconnect"),
   listNamespaces: () => invoke<NamespaceSummary[]>("list_namespaces"),
   listPods: (namespace?: string) =>

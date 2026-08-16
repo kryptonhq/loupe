@@ -21,6 +21,7 @@ pub mod resources;
 pub mod table;
 pub mod watch;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use kube::config::{KubeConfigOptions, Kubeconfig};
@@ -53,14 +54,40 @@ pub struct ClusterInfo {
     pub platform: String,
 }
 
-/// The active connection, shared across commands.
+/// The active connection, plus the ones already established.
+///
+/// Switching cluster used to mean rebuilding everything: authenticate,
+/// probe the version, then walk discovery — dozens of round trips on a
+/// cluster with a few operators installed. Anyone running staging and
+/// production switches constantly, and every switch cost several
+/// seconds and all cached context.
+///
+/// So connections are retained rather than replaced. Coming back to a
+/// cluster reuses its client *and* its discovery, which is the whole
+/// difference between a switch that is instant and one that is a cold
+/// start. A `kube::Client` is cheap to hold: it is a connection pool
+/// that idles when nothing is using it.
 ///
 /// `RwLock` rather than `Mutex` because reads (every resource listing)
 /// vastly outnumber writes (switching context), and a listing that is
 /// slow to return should not block other listings.
 #[derive(Default)]
 pub struct Session {
-    inner: RwLock<Option<Connected>>,
+    inner: RwLock<Pool>,
+}
+
+#[derive(Default)]
+struct Pool {
+    /// Context name of the connection commands act on.
+    active: Option<String>,
+    /// Every connection established this session, by context.
+    connections: HashMap<String, Connected>,
+}
+
+impl Pool {
+    fn current(&self) -> Option<&Connected> {
+        self.active.as_ref().and_then(|c| self.connections.get(c))
+    }
 }
 
 struct Connected {
@@ -79,13 +106,49 @@ impl Session {
     pub async fn client(&self) -> Result<kube::Client> {
         let guard = self.inner.read().await;
         guard
-            .as_ref()
+            .current()
             .map(|c| c.client.clone())
             .ok_or(AppError::NotConnected)
     }
 
     pub async fn info(&self) -> Option<ClusterInfo> {
-        self.inner.read().await.as_ref().map(|c| c.info.clone())
+        self.inner.read().await.current().map(|c| c.info.clone())
+    }
+
+    /// Every cluster connected to this session, active one first.
+    ///
+    /// What lets the UI offer an instant switch back, and say which
+    /// clusters a switch will not have to re-establish.
+    pub async fn connected(&self) -> Vec<ClusterInfo> {
+        let guard = self.inner.read().await;
+        let mut out: Vec<ClusterInfo> =
+            guard.connections.values().map(|c| c.info.clone()).collect();
+        out.sort_by(|a, b| {
+            let active = |i: &ClusterInfo| Some(&i.context) != guard.active.as_ref();
+            active(a).cmp(&active(b)).then(a.context.cmp(&b.context))
+        });
+        out
+    }
+
+    /// True when this context already has a connection, so switching to
+    /// it costs nothing.
+    ///
+    /// The UI asks `connected()` instead, which it needs anyway to badge
+    /// the picker; this is the direct form the tests use.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn is_connected(&self, context: &str) -> bool {
+        self.inner.read().await.connections.contains_key(context)
+    }
+
+    /// Makes an already-established connection the active one.
+    ///
+    /// Returns None when there is nothing to switch to, so the caller
+    /// can fall back to connecting properly.
+    pub async fn activate(&self, context: &str) -> Option<ClusterInfo> {
+        let mut guard = self.inner.write().await;
+        let info = guard.connections.get(context).map(|c| c.info.clone())?;
+        guard.active = Some(context.to_string());
+        Some(info)
     }
 
     /// The cluster's API surface, built once and reused.
@@ -94,7 +157,7 @@ impl Session {
             .inner
             .read()
             .await
-            .as_ref()
+            .current()
             .and_then(|c| c.discovery.clone())
         {
             return Ok(cached);
@@ -114,22 +177,43 @@ impl Session {
         let client = self.client().await?;
         let discovered = Arc::new(Discovery::new(client).run().await?);
 
-        if let Some(connected) = self.inner.write().await.as_mut() {
-            connected.discovery = Some(discovered.clone());
+        let mut guard = self.inner.write().await;
+        if let Some(context) = guard.active.clone() {
+            if let Some(connected) = guard.connections.get_mut(&context) {
+                connected.discovery = Some(discovered.clone());
+            }
         }
         Ok(discovered)
     }
 
     async fn set(&self, client: kube::Client, info: ClusterInfo) {
-        *self.inner.write().await = Some(Connected {
-            client,
-            info,
-            discovery: None,
-        });
+        let mut guard = self.inner.write().await;
+        let context = info.context.clone();
+        guard.connections.insert(
+            context.clone(),
+            Connected {
+                client,
+                info,
+                discovery: None,
+            },
+        );
+        guard.active = Some(context);
     }
 
+    /// Drops one connection. When it was the active one, the session is
+    /// left with nothing active rather than silently switching to
+    /// another cluster the user did not ask for.
+    pub async fn drop_context(&self, context: &str) {
+        let mut guard = self.inner.write().await;
+        guard.connections.remove(context);
+        if guard.active.as_deref() == Some(context) {
+            guard.active = None;
+        }
+    }
+
+    /// Drops every connection.
     pub async fn clear(&self) {
-        *self.inner.write().await = None;
+        *self.inner.write().await = Pool::default();
     }
 }
 
@@ -177,6 +261,13 @@ fn contexts_from(cfg: Kubeconfig) -> Vec<ContextInfo> {
 /// so a context that resolves but cannot be talked to fails here rather
 /// than on the first resource listing.
 pub async fn connect(session: &Session, context: &str) -> Result<ClusterInfo> {
+    // Already connected: make it active and return. This is the switch
+    // that used to cost several seconds of re-authenticating and
+    // re-walking discovery, and now costs nothing.
+    if let Some(info) = session.activate(context).await {
+        return Ok(info);
+    }
+
     let kubeconfig = Kubeconfig::read()?;
     if !kubeconfig.contexts.iter().any(|c| c.name == context) {
         return Err(AppError::UnknownContext(context.to_string()));
@@ -305,10 +396,139 @@ contexts:
         assert!(contexts_from(cfg).iter().all(|c| !c.is_current));
     }
 
+    /// A connection without a cluster behind it, for exercising the
+    /// pool's bookkeeping. Everything asserted below is about which
+    /// connection is active and which are retained, none of which needs
+    /// a reachable API server.
+    async fn pooled(session: &Session, context: &str) {
+        let info = ClusterInfo {
+            context: context.to_string(),
+            server: format!("https://{context}:6443"),
+            version: "v1.33.1".into(),
+            platform: "linux/arm64".into(),
+        };
+        let mut guard = session.inner.write().await;
+        guard.connections.insert(
+            context.to_string(),
+            Connected {
+                // Never used: no test here makes a request.
+                client: kube::Client::try_from(kube::Config::new(
+                    "https://127.0.0.1:6443".parse().unwrap(),
+                ))
+                .expect("build a client"),
+                info,
+                discovery: None,
+            },
+        );
+        guard.active = Some(context.to_string());
+    }
+
+    #[tokio::test]
+    async fn a_second_cluster_does_not_replace_the_first() {
+        // The point of the pool: coming back to a cluster reuses its
+        // client and its discovery rather than starting cold.
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        pooled(&session, "prod").await;
+
+        assert!(session.is_connected("staging").await);
+        assert!(session.is_connected("prod").await);
+        assert_eq!(
+            session.info().await.map(|i| i.context).as_deref(),
+            Some("prod")
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_back_is_instant_and_needs_no_kubeconfig() {
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        pooled(&session, "prod").await;
+
+        let switched = session.activate("staging").await;
+        assert_eq!(switched.map(|i| i.context).as_deref(), Some("staging"));
+        assert_eq!(
+            session.info().await.map(|i| i.context).as_deref(),
+            Some("staging")
+        );
+    }
+
+    #[tokio::test]
+    async fn activating_an_unconnected_context_says_so() {
+        // The caller falls back to connecting properly; answering with
+        // some other cluster would be much worse than answering nothing.
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        assert!(session.activate("never-seen").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_active_cluster_is_listed_first() {
+        // It is the one the user is looking at, so it leads.
+        let session = Session::default();
+        pooled(&session, "zeta").await;
+        pooled(&session, "alpha").await;
+
+        let names: Vec<String> = session
+            .connected()
+            .await
+            .into_iter()
+            .map(|i| i.context)
+            .collect();
+        assert_eq!(names, ["alpha", "zeta"]);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_active_cluster_leaves_nothing_active() {
+        // Silently switching to another cluster the user did not ask for
+        // is how a command lands somewhere unexpected.
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        pooled(&session, "prod").await;
+
+        session.drop_context("prod").await;
+
+        assert!(session.info().await.is_none());
+        assert!(matches!(
+            session.client().await,
+            Err(AppError::NotConnected)
+        ));
+        // The other connection survives.
+        assert!(session.is_connected("staging").await);
+    }
+
+    #[tokio::test]
+    async fn dropping_an_inactive_cluster_leaves_the_active_one_alone() {
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        pooled(&session, "prod").await;
+
+        session.drop_context("staging").await;
+
+        assert_eq!(
+            session.info().await.map(|i| i.context).as_deref(),
+            Some("prod")
+        );
+        assert!(!session.is_connected("staging").await);
+    }
+
+    #[tokio::test]
+    async fn clearing_drops_every_connection() {
+        let session = Session::default();
+        pooled(&session, "staging").await;
+        pooled(&session, "prod").await;
+
+        session.clear().await;
+
+        assert!(session.connected().await.is_empty());
+        assert!(session.info().await.is_none());
+    }
+
     #[tokio::test]
     async fn session_starts_disconnected() {
         let session = Session::default();
         assert!(session.info().await.is_none());
+        assert!(session.connected().await.is_empty());
         // Commands must fail loudly rather than fall back to some
         // ambient default cluster.
         assert!(matches!(

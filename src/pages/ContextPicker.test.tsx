@@ -19,6 +19,7 @@ vi.mock("../lib/api", async (original) => {
       connect: vi.fn(),
       getSettings: vi.fn(),
       setContextPinned: vi.fn(),
+      connectedClusters: vi.fn(),
     },
   };
 });
@@ -31,6 +32,7 @@ const listContexts = vi.mocked(api.listContexts);
 const connect = vi.mocked(api.connect);
 const getSettings = vi.mocked(api.getSettings);
 const setContextPinned = vi.mocked(api.setContextPinned);
+const connectedClusters = vi.mocked(api.connectedClusters);
 
 function settings(over: Partial<import("../lib/api").Settings> = {}) {
   return { theme: "system" as const, recentContexts: [], pinnedContexts: [], ...over };
@@ -59,6 +61,8 @@ beforeEach(() => {
   getSettings.mockReset();
   setContextPinned.mockReset();
   getSettings.mockResolvedValue(settings());
+  connectedClusters.mockReset();
+  connectedClusters.mockResolvedValue([]);
   setContextPinned.mockImplementation(async (context, pinned) =>
     settings({ pinnedContexts: pinned ? [context] : [] }),
   );
@@ -380,6 +384,63 @@ describe("ContextPicker", () => {
   it("still lists contexts when preferences cannot be read", async () => {
     // Recents are a convenience; losing them must not lose the picker.
     getSettings.mockRejectedValue({ kind: "settings", message: "no config dir" });
+
+    renderPicker();
+    expect(await screen.findByText("prod")).toBeInTheDocument();
+  });
+});
+
+// Several clusters connected at once. The point is that coming back to
+// one costs nothing: its client and its API discovery are still held, so
+// the switch re-authenticates nothing and re-walks nothing.
+describe("ContextPicker with several clusters connected", () => {
+  it("marks a context that is already connected", async () => {
+    listContexts.mockResolvedValue([context("prod"), context("staging")]);
+    connectedClusters.mockResolvedValue([
+      {
+        context: "staging",
+        server: "https://staging:6443",
+        version: "v1.33.1",
+        platform: "linux/arm64",
+      },
+    ]);
+
+    renderPicker();
+    expect(await screen.findByText("connected")).toBeInTheDocument();
+  });
+
+  it("does not mark the one already on screen twice", async () => {
+    // The live cluster already carries its own badge; a second one
+    // saying the same thing is noise.
+    listContexts.mockResolvedValue([context("prod")]);
+    connectedClusters.mockResolvedValue([
+      {
+        context: "prod",
+        server: "https://prod:6443",
+        version: "v1.33.1",
+        platform: "linux/arm64",
+      },
+    ]);
+
+    renderPicker({
+      current: {
+        context: "prod",
+        server: "https://prod:6443",
+        version: "v1.33.1",
+        platform: "linux/arm64",
+      },
+    });
+
+    await screen.findByText("prod");
+    expect(screen.getAllByText("connected")).toHaveLength(1);
+  });
+
+  it("still lists contexts when the connected set cannot be read", async () => {
+    // A convenience badge losing its data must not lose the picker.
+    connectedClusters.mockRejectedValue({
+      kind: "not_connected",
+      message: "not connected",
+    });
 
     renderPicker();
     expect(await screen.findByText("prod")).toBeInTheDocument();

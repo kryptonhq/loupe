@@ -243,9 +243,16 @@ export default function App() {
   }, []);
 
   async function onConnected() {
-    // Every cached list belongs to the previous cluster. Clearing rather
-    // than invalidating means no stale rows from the old cluster can
-    // flash on screen while the new ones load.
+    // Still cleared. Query keys do not carry the cluster they came from,
+    // so keeping them would let one cluster's rows appear under
+    // another's name — which is far worse than a refetch.
+    //
+    // The switch is fast anyway, and for the part that actually cost
+    // seconds: the Rust side retains each cluster's client and its API
+    // discovery, so coming back re-authenticates nothing and re-walks
+    // nothing. What is left is one listing request for the view on
+    // screen. Isolating the frontend cache per cluster would remove that
+    // too, and wants a key scheme rather than a comment.
     queryClient.clear();
     setCluster(await api.currentCluster());
     setSwitching(false);
@@ -253,6 +260,8 @@ export default function App() {
 
   async function disconnect() {
     await api.disconnect();
+    // Everything, because every connection is gone. A per-cluster
+    // disconnect drops only that cluster's keys.
     queryClient.clear();
     setCluster(null);
     setSwitching(false);

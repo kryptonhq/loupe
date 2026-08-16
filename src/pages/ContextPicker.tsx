@@ -46,7 +46,14 @@ const FILTER_THRESHOLD = 5;
 /// One row of the list, plus the heading that may precede it.
 type Row =
   | { kind: "heading"; label: string; key: string }
-  | { kind: "context"; context: ContextInfo; pinned: boolean; key: string };
+  | {
+      kind: "context";
+      context: ContextInfo;
+      pinned: boolean;
+      /// Already connected this session, so switching to it is instant.
+      connected: boolean;
+      key: string;
+    };
 
 export function ContextPicker({
   current,
@@ -66,6 +73,10 @@ export function ContextPicker({
 
   const [recent, setRecent] = useState<string[]>([]);
   const [pinned, setPinned] = useState<string[]>([]);
+  /// Contexts already connected this session. Switching to one of these
+  /// re-authenticates nothing and re-walks no discovery, so it is worth
+  /// saying which they are.
+  const [connected, setConnected] = useState<string[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -81,6 +92,11 @@ export function ContextPicker({
 
     // Recents and pins are the only thing that makes a long list usable.
     // Their absence is not worth an error: the list still works.
+    api
+      .connectedClusters()
+      .then((clusters) => setConnected(clusters.map((c) => c.context)))
+      .catch(() => {});
+
     api
       .getSettings()
       .then((s) => {
@@ -144,6 +160,7 @@ export function ContextPicker({
           kind: "context",
           context,
           pinned: pinned.includes(context.name),
+          connected: connected.includes(context.name),
           key: `ctx:${context.name}`,
         });
       }
@@ -157,7 +174,7 @@ export function ContextPicker({
       groups.rest,
     );
     return out;
-  }, [indexed, query, pinned, recent]);
+  }, [indexed, query, pinned, recent, connected]);
 
   const total = rows.length;
   const visibleRows = Math.ceil(LIST_HEIGHT / ROW_HEIGHT) + OVERSCAN * 2;
@@ -256,6 +273,7 @@ export function ContextPicker({
                           key={row.key}
                           context={row.context}
                           pinned={row.pinned}
+                          connected={row.connected}
                           active={current?.context === row.context.name}
                           connecting={connecting}
                           onConnect={connect}
@@ -286,6 +304,7 @@ export function ContextPicker({
 function ContextRow({
   context,
   pinned,
+  connected,
   active,
   connecting,
   onConnect,
@@ -293,6 +312,7 @@ function ContextRow({
 }: {
   context: ContextInfo;
   pinned: boolean;
+  connected: boolean;
   active: boolean;
   connecting: string | null;
   onConnect: (name: string) => void;
@@ -312,7 +332,11 @@ function ContextRow({
           <span className="flex items-center gap-2">
             <span className="truncate font-medium">{context.name}</span>
             {active && <Chip tone="ok">connected</Chip>}
-            {context.isCurrent && !active && (
+            {/* Already connected: the switch will not re-authenticate
+                or re-walk discovery, which is the difference between
+                instant and several seconds. */}
+            {connected && !active && <Chip tone="accent">connected</Chip>}
+            {context.isCurrent && !active && !connected && (
               <Chip tone="accent">kubeconfig default</Chip>
             )}
           </span>

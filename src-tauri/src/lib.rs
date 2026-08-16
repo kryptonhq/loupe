@@ -61,6 +61,33 @@ async fn current_cluster(session: tauri::State<'_, SharedSession>) -> Result<Opt
     Ok(session.inner().info().await)
 }
 
+/// Every cluster connected this session, active one first.
+///
+/// Switching to one of these costs nothing — its client and its API
+/// discovery are still held.
+#[tauri::command]
+async fn connected_clusters(session: tauri::State<'_, SharedSession>) -> Result<Vec<ClusterInfo>> {
+    Ok(session.inner().connected().await)
+}
+
+/// Drops one cluster's connection without leaving the others.
+#[tauri::command]
+async fn disconnect_context(
+    session: tauri::State<'_, SharedSession>,
+    context: String,
+) -> Result<()> {
+    // Streams belonging to the cluster being dropped would otherwise
+    // keep running against it. They are not tracked per context, so
+    // everything long-lived goes — the alternative is a leak that only
+    // shows up after an afternoon of switching.
+    log_streams().cancel_all().await;
+    exec_sessions().close_all().await;
+    forwards().stop_all().await;
+    watches().stop_all().await;
+    session.inner().drop_context(&context).await;
+    Ok(())
+}
+
 #[tauri::command]
 async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // Followed log streams hold open connections to the cluster we are
@@ -580,6 +607,8 @@ pub fn run() {
             list_contexts,
             connect,
             current_cluster,
+            connected_clusters,
+            disconnect_context,
             disconnect,
             list_namespaces,
             list_pods,
