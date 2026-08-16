@@ -372,6 +372,20 @@ async fn start_pod_logs(
     cluster::logs::stream(session.inner(), log_streams(), options, channel).await
 }
 
+/// Streams every pod matching a selector into one merged view.
+///
+/// A Deployment's logs are the interleaved logs of its replicas; reading
+/// them one pod at a time is the slowest way to find the replica that
+/// differs, which is why `stern` exists.
+#[tauri::command]
+async fn start_merged_logs(
+    session: tauri::State<'_, SharedSession>,
+    options: cluster::logs::MergedLogOptions,
+    channel: tauri::ipc::Channel<cluster::logs::LogEvent>,
+) -> Result<u64> {
+    cluster::logs::stream_merged(session.inner(), log_streams(), options, channel).await
+}
+
 /// Cancels a stream. False means it had already ended by itself.
 #[tauri::command]
 async fn stop_pod_logs(id: u64) -> Result<bool> {
@@ -481,6 +495,7 @@ pub fn run() {
             list_helm_releases,
             get_helm_release,
             start_pod_logs,
+            start_merged_logs,
             stop_pod_logs,
             save_text,
             get_settings,

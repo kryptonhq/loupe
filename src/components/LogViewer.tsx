@@ -59,13 +59,40 @@ const PIN_SLACK = LINE_HEIGHT * 2;
 /// "enough to see the stack frame either side", and "a bit more".
 const CONTEXT_CHOICES = [0, 2, 5];
 
+/// Colours cycled through per source pod in a merged view.
+///
+/// Colour rather than only a name prefix, because twelve interleaved
+/// streams are scanned rather than read — the eye picks out "this line
+/// came from a different replica" long before it parses the name.
+const SOURCE_TONES = [
+  "text-info",
+  "text-success",
+  "text-warn",
+  "text-accent",
+  "text-danger",
+];
+
 interface LogViewerProps {
   namespace: string;
   pod: string;
   containers: ContainerView[];
+  /// Set to merge every pod matching a label selector into one view,
+  /// rather than streaming the single pod named above. A Deployment's
+  /// logs *are* the interleaved logs of its replicas, and reading them
+  /// one at a time is the slowest way to find the one that differs.
+  selector?: string;
+  /// What the merged view is of, for the heading — "Deployment api".
+  workload?: string;
 }
 
-export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
+export function LogViewer({
+  namespace,
+  pod,
+  containers,
+  selector,
+  workload,
+}: LogViewerProps) {
+  const merged = selector !== undefined;
   const [container, setContainer] = useState(containers[0]?.name ?? "");
   const [follow, setFollow] = useState(true);
   const [timestamps, setTimestamps] = useState(false);
@@ -82,6 +109,13 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
   // connection and lose the lines that arrive while you read.
   const [pinned, setPinned] = useState(true);
 
+  /// Pods seen in a merged view, in the order they joined. The index
+  /// into this list is what picks each pod's colour, so the colours stay
+  /// put as replicas come and go.
+  const [pods, setPods] = useState<string[]>([]);
+  /// Set when more pods match than are being streamed.
+  const [capped, setCapped] = useState<{ streaming: number; matched: number } | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(ASSUMED_VIEWPORT);
   const [scrollTop, setScrollTop] = useState(0);
@@ -94,7 +128,12 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
   // something changed; the buffer itself is read during render, which is
   // safe precisely because every mutation is followed by a bump.
   const buffer = useRef(new LogBuffer(MAX_LINES));
-  const pending = useRef<string[]>([]);
+  // Sources live in a parallel ring pushed in lockstep, so a line and
+  // its pod share an absolute index. Keeping them apart means the filter
+  // matches log text rather than accidentally matching pod names, and
+  // the tail-drop stays a single rule applied to both.
+  const sources = useRef(new LogBuffer(MAX_LINES));
+  const pending = useRef<{ text: string; source: string }[]>([]);
   const frame = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
 
@@ -114,7 +153,10 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
   const flush = useCallback(() => {
     frame.current = null;
     if (pending.current.length === 0) return;
-    for (const line of pending.current) buffer.current.push(line);
+    for (const line of pending.current) {
+      buffer.current.push(line.text);
+      sources.current.push(line.source);
+    }
     pending.current = [];
     setRevision((r) => r + 1);
   }, []);
@@ -138,6 +180,7 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     }
     pending.current = [];
     buffer.current.clear();
+    sources.current.clear();
     // Absolute indices restart with the buffer, so matches recorded
     // against the old stream now name different lines.
     index.current.reset();
@@ -145,14 +188,29 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     setError(null);
     setStatus("streaming");
     setPinned(true);
+    setPods([]);
+    setCapped(null);
 
     const channel = new Channel<LogEvent>();
     channel.onmessage = (event) => {
       if (cancelled) return;
       switch (event.kind) {
         case "lines":
-          pending.current.push(...event.texts);
+          for (const text of event.texts) {
+            pending.current.push({ text, source: event.source ?? "" });
+          }
           schedule();
+          break;
+        case "podStarted":
+          setPods((seen) => (seen.includes(event.pod) ? seen : [...seen, event.pod]));
+          break;
+        case "podEnded":
+          // Deliberately not removed from the list: during a rollout the
+          // replica that just died is often the one you were reading,
+          // and dropping its colour mid-scroll is disorienting.
+          break;
+        case "capped":
+          setCapped(event);
           break;
         case "ended":
           // Flushed rather than scheduled: there will be no further
@@ -168,19 +226,31 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
       }
     };
 
-    api
-      .startPodLogs(
-        {
-          namespace,
-          pod,
-          container,
-          follow,
-          tailLines: 500,
-          timestamps,
-          previous,
-        },
-        channel,
-      )
+    const started = merged
+      ? api.startMergedLogs(
+          {
+            namespace,
+            selector: selector!,
+            container: containers.length > 1 ? container : null,
+            tailLines: 500,
+            timestamps,
+          },
+          channel,
+        )
+      : api.startPodLogs(
+          {
+            namespace,
+            pod,
+            container,
+            follow,
+            tailLines: 500,
+            timestamps,
+            previous,
+          },
+          channel,
+        );
+
+    started
       .then((id) => {
         // The effect may have been torn down while the command was in
         // flight; stop the stream we just started rather than leaking it.
@@ -207,7 +277,19 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
         streamId.current = null;
       }
     };
-  }, [namespace, pod, container, follow, timestamps, previous, flush, schedule]);
+  }, [
+    namespace,
+    pod,
+    container,
+    follow,
+    timestamps,
+    previous,
+    merged,
+    selector,
+    containers.length,
+    flush,
+    schedule,
+  ]);
 
   // Track the element's height so the window is sized to what is
   // actually visible. Guarded because jsdom has no ResizeObserver and no
@@ -245,12 +327,32 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     ? maxStart
     : Math.min(maxStart, Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN));
 
-  const window: { index: number; text: string }[] = [];
+  const window: { index: number; text: string; source: string }[] = [];
   for (let p = start; p < Math.min(start + rows, total); p += 1) {
     const absolute = shown ? shown[p] : firstIndex + p;
     const text = buffer.current.get(absolute);
-    if (text !== undefined) window.push({ index: absolute, text });
+    if (text !== undefined) {
+      window.push({
+        index: absolute,
+        text,
+        source: sources.current.get(absolute) ?? "",
+      });
+    }
   }
+
+  /// The colour a pod's lines carry. Keyed on join order so a replica
+  /// keeps its colour for the life of the view.
+  const toneFor = (source: string) => {
+    const at = pods.indexOf(source);
+    return at < 0 ? "text-content-muted" : SOURCE_TONES[at % SOURCE_TONES.length];
+  };
+
+  /// How wide to pad the pod column, so lines line up without the
+  /// longest name pushing every other line off the right.
+  const sourceWidth = Math.min(
+    28,
+    pods.reduce((widest, name) => Math.max(widest, name.length), 0),
+  );
 
   // Chase the bottom after a flush. Not in the render path: writing
   // scrollTop forces layout, and doing it per line was half the reason
@@ -486,6 +588,28 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
         </div>
       )}
 
+      {merged && (pods.length > 0 || capped) && (
+        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-1.5 text-2xs">
+          <span className="shrink-0 text-content-muted">
+            {workload ? `${workload} · ` : ""}
+            {pods.length} pod{pods.length === 1 ? "" : "s"}
+          </span>
+          {pods.map((name) => (
+            <span key={name} className={`shrink-0 ${toneFor(name)} opacity-90`}>
+              {name}
+            </span>
+          ))}
+          {capped && (
+            // Said out loud. A merged view quietly missing half the
+            // replicas is worse than one that admits it, because the
+            // whole point is finding the replica that differs.
+            <span className="ml-auto shrink-0 text-warn">
+              showing {capped.streaming} of {capped.matched} matching pods
+            </span>
+          )}
+        </div>
+      )}
+
       {compiled.error && (
         <div className="animate-fade-in border-b border-warn/20 bg-warn/[0.08] px-4 py-1.5 text-2xs text-warn">
           {/* Showing everything, not nothing: a regex is invalid for most
@@ -526,13 +650,24 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
               style={{ transform: `translateY(${start * LINE_HEIGHT}px)` }}
               className="absolute left-0 top-0 w-full"
             >
-              {window.map(({ index: absolute, text }) => (
+              {window.map(({ index: absolute, text, source }) => (
                 <div
                   key={absolute}
                   data-testid="log-line"
                   style={{ height: LINE_HEIGHT, lineHeight: `${LINE_HEIGHT}px` }}
                   className="whitespace-pre"
                 >
+                  {/* Twelve interleaved streams are scanned rather than
+                      read: the colour says "different replica" long
+                      before the eye parses the name. */}
+                  {source && (
+                    <span
+                      data-testid="log-source"
+                      className={`${toneFor(source)} opacity-80`}
+                    >
+                      {source.padEnd(sourceWidth).slice(0, sourceWidth)}{"  "}
+                    </span>
+                  )}
                   {/* Matches are marked in place rather than merely
                       surviving the filter — with context lines on, the
                       line that matched has to be findable among them. */}

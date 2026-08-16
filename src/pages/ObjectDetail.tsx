@@ -14,6 +14,8 @@ import {
 import { DataView } from "../components/DataView";
 import { RelatedPanel } from "../components/RelatedPanel";
 import { ObjectActions } from "../components/ObjectActions";
+import { LogViewer } from "../components/LogViewer";
+import { workloadSelector } from "../lib/kinds";
 import { hasDataTab } from "../lib/kinds";
 import { api, type GvkRef, type RelatedObject } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
@@ -110,11 +112,18 @@ export function ObjectDetail({
   // get a tab of their own rather than sending people to the YAML.
   const dataKind = object ? hasDataTab(object.kind, object.apiVersion) : null;
 
+  // The label selector a merged log view streams by, read from the
+  // object's own spec. Null for anything that does not select pods.
+  const selector = object ? workloadSelector(object.kind, object.yaml) : null;
+
   // A cluster-scoped object has no namespace to look for events in, and
   // guessing "default" would show somebody else's.
   const tabs: TabSpec[] = [
     { id: "overview", label: "Overview" },
     ...(dataKind && namespace ? [{ id: "data", label: "Data" }] : []),
+    // A workload's logs are the interleaved logs of its replicas, which
+    // is the whole reason this tab exists here rather than only on pods.
+    ...(selector && namespace ? [{ id: "logs", label: "Logs" }] : []),
     ...(namespace ? [{ id: "events", label: "Events" }] : []),
     ...(onOpenRelated ? [{ id: "related", label: "Related" }] : []),
     { id: "yaml", label: "YAML" },
@@ -205,6 +214,16 @@ export function ObjectDetail({
 
       {tab === "data" && dataKind && namespace && (
         <DataView namespace={namespace} name={name} kind={dataKind} />
+      )}
+
+      {tab === "logs" && selector && namespace && (
+        <LogViewer
+          namespace={namespace}
+          pod=""
+          containers={[]}
+          selector={selector}
+          workload={`${resource.kind} ${name}`}
+        />
       )}
 
       {tab === "events" && namespace && (

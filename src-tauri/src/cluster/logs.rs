@@ -39,7 +39,26 @@ pub enum LogEvent {
     /// the IPC boundary and is deserialised by the webview. A pod
     /// emitting 5,000 lines a second is a manageable amount of text and
     /// an unmanageable number of round-trips.
-    Lines { texts: Vec<String> },
+    Lines {
+        texts: Vec<String>,
+        /// Which pod these came from, when the view is merging several.
+        /// Absent for an ordinary single-pod stream, so nothing gets
+        /// prefixed that does not need to be.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+    /// A pod joined a merged stream — the first resolution of a
+    /// selector, or a replica that appeared during a rollout.
+    PodStarted { pod: String },
+    /// One pod's stream finished. Distinct from the view ending: during
+    /// a rollout, old replicas finish while new ones are starting.
+    PodEnded { pod: String },
+    /// More pods match than will be streamed at once.
+    ///
+    /// Said out loud rather than silently truncated. A merged view
+    /// quietly missing half the replicas is worse than one that admits
+    /// it, because the whole point is finding the replica that differs.
+    Capped { streaming: usize, matched: usize },
     /// The stream finished normally: the container exited, or a
     /// non-following read reached the end of the buffer.
     Ended,
@@ -165,7 +184,7 @@ pub async fn stream(
 
     let id = streams.allocate();
     let task = tokio::spawn(async move {
-        pump(reader.lines(), sink).await;
+        pump(reader.lines(), sink, None).await;
         streams.finish(id).await;
     });
 
@@ -177,12 +196,13 @@ pub async fn stream(
 ///
 /// Returns false when the receiver has gone away, which is the signal to
 /// stop reading: there is nothing left to stream to.
-fn send_batch(sink: &impl LogSink, batch: &mut Vec<String>) -> bool {
+fn send_batch(sink: &impl LogSink, batch: &mut Vec<String>, source: Option<&str>) -> bool {
     if batch.is_empty() {
         return true;
     }
     sink.send(LogEvent::Lines {
         texts: std::mem::take(batch),
+        source: source.map(|s| s.to_string()),
     })
 }
 
@@ -195,7 +215,7 @@ fn send_batch(sink: &impl LogSink, batch: &mut Vec<String>) -> bool {
 /// A batch is sent when it reaches `MAX_BATCH` or when `FLUSH_INTERVAL`
 /// passes, whichever comes first. That bounds both the latency of a
 /// quiet pod's occasional line and the message rate of a loud one.
-async fn pump<S>(mut lines: S, sink: impl LogSink)
+async fn pump<S>(mut lines: S, sink: impl LogSink, source: Option<&str>)
 where
     S: futures::Stream<Item = std::io::Result<String>> + Unpin,
 {
@@ -217,21 +237,27 @@ where
             item = lines.try_next() => match item {
                 Ok(Some(text)) => {
                     batch.push(text);
-                    if batch.len() >= MAX_BATCH && !send_batch(&sink, &mut batch) {
+                    if batch.len() >= MAX_BATCH && !send_batch(&sink, &mut batch, source) {
                         return;
                     }
                 }
                 Ok(None) => {
                     // The tail of a short stream would otherwise sit in
                     // the batch until an interval that never comes.
-                    if !send_batch(&sink, &mut batch) {
+                    if !send_batch(&sink, &mut batch, source) {
                         return;
                     }
-                    sink.send(LogEvent::Ended);
+                    match source {
+                        // In a merged view one pod ending is not the
+                        // view ending: during a rollout, old replicas
+                        // finish while new ones are still starting.
+                        Some(pod) => sink.send(LogEvent::PodEnded { pod: pod.to_string() }),
+                        None => sink.send(LogEvent::Ended),
+                    };
                     return;
                 }
                 Err(e) => {
-                    if !send_batch(&sink, &mut batch) {
+                    if !send_batch(&sink, &mut batch, source) {
                         return;
                     }
                     sink.send(LogEvent::Failed { message: e.to_string() });
@@ -239,12 +265,173 @@ where
                 }
             },
             _ = ticker.tick() => {
-                if !send_batch(&sink, &mut batch) {
+                if !send_batch(&sink, &mut batch, source) {
                     return;
                 }
             }
         }
     }
+}
+
+/// How many pods a merged view will stream at once.
+///
+/// A bound, not a preference: without one, logging a DaemonSet on a
+/// 500-node cluster opens 500 connections to the API server. When the
+/// cap bites, the view says so rather than quietly showing a subset.
+const MAX_MERGED_STREAMS: usize = 20;
+
+/// How often the pod set behind a selector is re-resolved.
+///
+/// Polling rather than watching, for now — the watch machinery is a
+/// separate piece of work. The interval is what decides how quickly a
+/// replica that appears during a rollout joins the view, and a few
+/// seconds is well inside the time a rollout takes.
+const RESOLVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Which pods to merge, and how to read them.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedLogOptions {
+    pub namespace: String,
+    /// A label selector in the API server's own syntax, taken from the
+    /// workload's `spec.selector`. Resolving the workload to a selector
+    /// happens in the caller so this stays one concept.
+    pub selector: String,
+    pub container: Option<String>,
+    pub tail_lines: Option<i64>,
+    pub timestamps: bool,
+}
+
+/// Streams every pod matching a selector into one view.
+///
+/// A Deployment's logs *are* the interleaved logs of its replicas. When
+/// one replica in twelve is misbehaving, reading them one at a time is
+/// the slowest possible way to find it — which is why `stern` exists,
+/// and why almost everyone debugging a rollout has it installed next to
+/// kubectl. Merging them here is the same job without the second tool.
+pub async fn stream_merged(
+    session: &Session,
+    streams: &'static LogStreams,
+    opts: MergedLogOptions,
+    sink: impl LogSink + Clone,
+) -> Result<u64> {
+    let client = session.client().await?;
+    let api: Api<Pod> = Api::namespaced(client, &opts.namespace);
+
+    // Resolved once before spawning, so an invalid selector or an RBAC
+    // denial surfaces as a command error rather than as a view that
+    // never produces a line.
+    let initial = matching_pods(&api, &opts.selector).await?;
+
+    let id = streams.allocate();
+    // The client rather than the session: cloning a `kube::Client` is
+    // cheap (it shares one connection pool) and it is `'static`, which
+    // the detached task needs. Carrying a borrowed session would tie the
+    // task's lifetime to the command that spawned it.
+    let client = api.clone();
+
+    let task = tokio::spawn(async move {
+        // Per-pod tasks, so one pod's stream ending does not disturb the
+        // others — during a rollout that happens constantly.
+        let mut running: HashMap<String, AbortHandle> = HashMap::new();
+        let mut known = initial;
+        let mut ticker = tokio::time::interval_at(
+            tokio::time::Instant::now() + RESOLVE_INTERVAL,
+            RESOLVE_INTERVAL,
+        );
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            if known.len() > MAX_MERGED_STREAMS
+                && !sink.send(LogEvent::Capped {
+                    streaming: MAX_MERGED_STREAMS,
+                    matched: known.len(),
+                })
+            {
+                break;
+            }
+
+            for pod in known.iter().take(MAX_MERGED_STREAMS) {
+                if running.contains_key(pod) {
+                    continue;
+                }
+                if !sink.send(LogEvent::PodStarted { pod: pod.clone() }) {
+                    break;
+                }
+                let handle = spawn_pod_stream(client.clone(), &opts, pod.clone(), sink.clone());
+                running.insert(pod.clone(), handle);
+            }
+
+            // Pods that have gone stop being tracked, so a replica with
+            // the same name later gets a fresh stream rather than being
+            // mistaken for the one that died.
+            running.retain(|pod, handle| {
+                if known.contains(pod) {
+                    return true;
+                }
+                handle.abort();
+                false
+            });
+
+            ticker.tick().await;
+
+            match matching_pods(&api, &opts.selector).await {
+                Ok(found) => known = found,
+                // A failed re-resolution is not fatal: the streams
+                // already open keep working, and the next tick tries
+                // again. Tearing the view down over a blip would be
+                // worse than being briefly out of date.
+                Err(_) => continue,
+            }
+        }
+
+        for (_, handle) in running.drain() {
+            handle.abort();
+        }
+        streams.finish(id).await;
+    });
+
+    streams.register(id, task.abort_handle()).await;
+    Ok(id)
+}
+
+/// Pod names matching a selector, sorted so the view is stable.
+async fn matching_pods(api: &Api<Pod>, selector: &str) -> Result<Vec<String>> {
+    use kube::api::ResourceExt;
+    let pods = api
+        .list(&kube::api::ListParams::default().labels(selector))
+        .await?;
+    let mut names: Vec<String> = pods.items.iter().map(|p| p.name_any()).collect();
+    names.sort();
+    Ok(names)
+}
+
+/// Opens one pod's stream as a detached task, tagged with its name.
+fn spawn_pod_stream(
+    api: Api<Pod>,
+    opts: &MergedLogOptions,
+    pod: String,
+    sink: impl LogSink,
+) -> AbortHandle {
+    let params = LogParams {
+        container: opts.container.clone(),
+        follow: true,
+        tail_lines: opts.tail_lines,
+        timestamps: opts.timestamps,
+        ..Default::default()
+    };
+
+    tokio::spawn(async move {
+        // A pod that is still starting has no log yet. That is normal
+        // during a rollout and must not be reported as a failure of the
+        // merged view; the next resolution picks it up.
+        let Ok(reader) = api.log_stream(&pod, &params).await else {
+            sink.send(LogEvent::PodEnded { pod });
+            return;
+        };
+        pump(reader.lines(), sink, Some(&pod)).await;
+    })
+    .abort_handle()
 }
 
 #[cfg(test)]
@@ -253,10 +440,15 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     /// Collects events in memory, standing in for the webview.
+    ///
+    /// Clonable because a merged stream hands a sink to each pod's task;
+    /// every clone shares the same recorded events, the way one channel
+    /// shared between them would.
+    #[derive(Clone)]
     struct Collector {
         events: std::sync::Arc<StdMutex<Vec<LogEvent>>>,
         /// Simulates a receiver that has gone away.
-        open: std::sync::atomic::AtomicBool,
+        open: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl LogSink for Collector {
@@ -280,7 +472,7 @@ mod tests {
         events
             .iter()
             .flat_map(|e| match e {
-                LogEvent::Lines { texts } => texts.clone(),
+                LogEvent::Lines { texts, .. } => texts.clone(),
                 _ => Vec::new(),
             })
             .collect()
@@ -290,7 +482,7 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                LogEvent::Lines { texts } => Some(texts.len()),
+                LogEvent::Lines { texts, .. } => Some(texts.len()),
                 _ => None,
             })
             .collect()
@@ -301,7 +493,7 @@ mod tests {
         (
             Collector {
                 events: events.clone(),
-                open: std::sync::atomic::AtomicBool::new(true),
+                open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             },
             events,
         )
@@ -329,7 +521,7 @@ mod tests {
         );
 
         let (sink, events) = collector();
-        pump(stream, sink).await;
+        pump(stream, sink, None).await;
 
         let seen = events.lock().unwrap();
         assert_eq!(lines_of(&seen), lines, "every line must arrive, in order");
@@ -350,7 +542,7 @@ mod tests {
         // A stream shorter than a batch would otherwise leave its lines
         // sitting in the buffer waiting for an interval that never comes.
         let (sink, events) = collector();
-        pump(ok_stream(vec!["only", "two"]), sink).await;
+        pump(ok_stream(vec!["only", "two"]), sink, None).await;
 
         let seen = events.lock().unwrap();
         assert_eq!(lines_of(&seen), vec!["only", "two"]);
@@ -370,7 +562,7 @@ mod tests {
         ]);
 
         let (sink, events) = collector();
-        pump(stream, sink).await;
+        pump(stream, sink, None).await;
 
         let seen = events.lock().unwrap();
         assert_eq!(lines_of(&seen), vec!["before"]);
@@ -389,7 +581,7 @@ mod tests {
 
         let (sink, events) = collector();
         sink.open.store(false, Ordering::Relaxed);
-        pump(futures::stream::iter(lines), sink).await;
+        pump(futures::stream::iter(lines), sink, None).await;
 
         assert!(
             events.lock().unwrap().is_empty(),
@@ -405,7 +597,7 @@ mod tests {
         let (tx, rx) = futures::channel::mpsc::unbounded::<std::io::Result<String>>();
 
         let (sink, events) = collector();
-        let task = tokio::spawn(async move { pump(rx, sink).await });
+        let task = tokio::spawn(async move { pump(rx, sink, None).await });
 
         // Several intervals with nothing to say.
         tokio::time::sleep(FLUSH_INTERVAL * 4).await;
@@ -417,6 +609,99 @@ mod tests {
 
         drop(tx);
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_merged_stream_tags_lines_with_the_pod_they_came_from() {
+        // Twelve interleaved streams are unreadable without knowing
+        // which replica said what — that is the whole feature.
+        let (sink, events) = collector();
+        pump(ok_stream(vec!["listening"]), sink, Some("api-7d9-xk2")).await;
+
+        let seen = events.lock().unwrap();
+        match seen.first() {
+            Some(LogEvent::Lines { texts, source }) => {
+                assert_eq!(texts, &["listening"]);
+                assert_eq!(source.as_deref(), Some("api-7d9-xk2"));
+            }
+            other => panic!("expected tagged lines, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_single_pod_stream_tags_nothing() {
+        // Prefixing every line with the pod name in a single-pod view
+        // would be noise, and would waste a chunk of every line.
+        let (sink, events) = collector();
+        pump(ok_stream(vec!["listening"]), sink, None).await;
+
+        let seen = events.lock().unwrap();
+        match seen.first() {
+            Some(LogEvent::Lines { source, .. }) => assert!(source.is_none()),
+            other => panic!("expected untagged lines, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn one_pod_ending_is_not_the_view_ending() {
+        // During a rollout old replicas finish constantly while new ones
+        // start. Sending Ended for each would make the view claim to be
+        // over a dozen times before it is.
+        let (sink, events) = collector();
+        pump(ok_stream(vec!["bye"]), sink, Some("api-old")).await;
+
+        let seen = events.lock().unwrap();
+        assert!(
+            matches!(seen.last(), Some(LogEvent::PodEnded { pod }) if pod == "api-old"),
+            "got {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|e| matches!(e, LogEvent::Ended)),
+            "a merged view must not end because one pod did: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_pod_stream_still_ends_the_view() {
+        let (sink, events) = collector();
+        pump(ok_stream(vec!["bye"]), sink, None).await;
+        assert!(matches!(
+            events.lock().unwrap().last(),
+            Some(LogEvent::Ended)
+        ));
+    }
+
+    #[tokio::test]
+    async fn merging_requires_a_connection() {
+        let session = Session::default();
+        let (sink, _events) = collector();
+        let opts = MergedLogOptions {
+            namespace: "default".into(),
+            selector: "app=api".into(),
+            container: None,
+            tail_lines: Some(100),
+            timestamps: false,
+        };
+        assert!(matches!(
+            stream_merged(&session, streams(), opts, sink).await,
+            Err(crate::error::AppError::NotConnected)
+        ));
+    }
+
+    #[test]
+    fn the_merged_stream_count_is_bounded() {
+        // Logging a DaemonSet on a 500-node cluster must not open 500
+        // connections to the API server. Exercises the same `take` the
+        // stream loop uses rather than asserting the constant, which the
+        // compiler would fold away to nothing.
+        let matched: Vec<String> = (0..500).map(|i| format!("pod-{i}")).collect();
+        let streamed: Vec<&String> = matched.iter().take(MAX_MERGED_STREAMS).collect();
+
+        assert_eq!(streamed.len(), MAX_MERGED_STREAMS);
+        assert!(
+            streamed.len() < matched.len(),
+            "the cap has to actually bite on a large DaemonSet"
+        );
     }
 
     #[tokio::test]
@@ -478,7 +763,7 @@ mod tests {
         let session = Session::default();
         let collector = Collector {
             events: Default::default(),
-            open: std::sync::atomic::AtomicBool::new(true),
+            open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         let opts = LogOptions {
             namespace: "default".into(),
@@ -523,7 +808,7 @@ mod tests {
         let events = std::sync::Arc::new(StdMutex::new(Vec::new()));
         let collector = Collector {
             events: events.clone(),
-            open: std::sync::atomic::AtomicBool::new(true),
+            open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
 
         let opts = LogOptions {

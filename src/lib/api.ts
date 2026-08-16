@@ -57,6 +57,9 @@ export interface ApiError {
     | "conflict"
     | "settings"
     | "export"
+    /// Refused locally because the context is marked read-only. Not an
+    /// RBAC denial — the cluster was never asked.
+    | "read_only"
     | "kubernetes";
   message: string;
 }
@@ -400,9 +403,31 @@ export interface LogOptions {
 /// thousands of lines a second would otherwise be thousands of IPC
 /// round-trips a second, which costs more than rendering them.
 export type LogEvent =
-  | { kind: "lines"; texts: string[] }
+  /// `source` is set only when the view is merging several pods, so a
+  /// single-pod stream wastes no space prefixing every line.
+  | { kind: "lines"; texts: string[]; source?: string }
+  /// A pod joined a merged view — the first resolution of a selector, or
+  /// a replica that appeared during a rollout.
+  | { kind: "podStarted"; pod: string }
+  /// One pod's stream finished. Not the view ending: during a rollout,
+  /// old replicas finish while new ones are starting.
+  | { kind: "podEnded"; pod: string }
+  /// More pods match than are being streamed. Said out loud rather than
+  /// silently truncated.
+  | { kind: "capped"; streaming: number; matched: number }
   | { kind: "ended" }
   | { kind: "failed"; message: string };
+
+/// Which pods to merge into one view, and how to read them.
+export interface MergedLogOptions {
+  namespace: string;
+  /// A label selector in the API server's own syntax, taken from the
+  /// workload's spec.selector.
+  selector: string;
+  container?: string | null;
+  tailLines?: number | null;
+  timestamps: boolean;
+}
 
 /// Progress from a node drain. Per-pod because a drain is a sequence of
 /// independent evictions, several of which are expected to be skipped
@@ -528,6 +553,11 @@ export const api = {
   startPodLogs: (options: LogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_pod_logs", { options, channel }),
   stopPodLogs: (id: number) => invoke<boolean>("stop_pod_logs", { id }),
+
+  /// Streams every pod matching a selector into one merged view — a
+  /// Deployment's logs are the interleaved logs of its replicas.
+  startMergedLogs: (options: MergedLogOptions, channel: Channel<LogEvent>) =>
+    invoke<number>("start_merged_logs", { options, channel }),
 
   /// Writes text to a file the user picks. Resolves with the path
   /// written, or null if they cancelled — an ordinary outcome, not an

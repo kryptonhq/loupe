@@ -24,6 +24,7 @@ vi.mock("../lib/api", async (original) => {
     api: {
       ...actual.api,
       startPodLogs: vi.fn(),
+      startMergedLogs: vi.fn(),
       stopPodLogs: vi.fn(),
       saveText: vi.fn(),
     },
@@ -33,6 +34,7 @@ vi.mock("../lib/api", async (original) => {
 const startPodLogs = vi.mocked(api.startPodLogs);
 const stopPodLogs = vi.mocked(api.stopPodLogs);
 const saveText = vi.mocked(api.saveText);
+const startMergedLogs = vi.mocked(api.startMergedLogs);
 
 /// jsdom has no clipboard. Stands in for one, and records what was put
 /// on it so the export can be asserted against.
@@ -91,6 +93,22 @@ function emitLines(...texts: string[]) {
   emit({ kind: "lines", texts });
 }
 
+/// Renders a merged view over a selector rather than a single pod.
+function renderMerged(selector = "app=api") {
+  render(
+    <LogViewer
+      namespace="payments"
+      pod=""
+      containers={[container("app")]}
+      selector={selector}
+      workload="Deployment api"
+    />,
+  );
+  const user = userEvent.setup();
+  stubClipboard();
+  return user;
+}
+
 /// The lines currently in the DOM. Deliberately not "the lines the
 /// stream sent" — the gap between the two is the windowing.
 function renderedLines() {
@@ -103,11 +121,16 @@ beforeEach(() => {
   stopPodLogs.mockReset();
   saveText.mockReset();
   saveText.mockResolvedValue("/tmp/coredns.log");
+  startMergedLogs.mockReset();
 
   clipboard.text = "";
 
   let nextId = 1;
   startPodLogs.mockImplementation(async (_options, channel) => {
+    channels.push(channel as unknown as { onmessage?: (e: LogEvent) => void });
+    return nextId++;
+  });
+  startMergedLogs.mockImplementation(async (_options, channel) => {
     channels.push(channel as unknown as { onmessage?: (e: LogEvent) => void });
     return nextId++;
   });
@@ -585,5 +608,128 @@ describe("LogViewer", () => {
     emitLines("fresh-from-sidecar");
     await screen.findByText("fresh-from-sidecar");
     expect(screen.queryByText("stale-from-app")).not.toBeInTheDocument();
+  });
+});
+
+// Merging several pods into one view. A Deployment's logs *are* the
+// interleaved logs of its replicas, and reading them one pod at a time
+// is the slowest way to find the one that differs — which is why stern
+// exists, and why this needs to be legible rather than just correct.
+describe("LogViewer merged", () => {
+  it("streams by selector rather than by pod", async () => {
+    renderMerged("app=api");
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    const [options] = startMergedLogs.mock.calls[0];
+    expect(options.selector).toBe("app=api");
+    expect(options.namespace).toBe("payments");
+    // The single-pod path must not also fire.
+    expect(startPodLogs).not.toHaveBeenCalled();
+  });
+
+  it("marks each line with the pod it came from", async () => {
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-7d9-aaa" });
+    emit({ kind: "lines", texts: ["listening"], source: "api-7d9-aaa" });
+
+    await screen.findByText(/listening/);
+    const sources = screen.getAllByTestId("log-source");
+    expect(sources[0].textContent).toContain("api-7d9-aaa");
+  });
+
+  it("gives different pods different colours", async () => {
+    // Twelve interleaved streams are scanned rather than read: the
+    // colour says "different replica" before the name is parsed.
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-a" });
+    emit({ kind: "podStarted", pod: "api-b" });
+    emit({ kind: "lines", texts: ["from a"], source: "api-a" });
+    emit({ kind: "lines", texts: ["from b"], source: "api-b" });
+
+    await screen.findByText(/from b/);
+    const [first, second] = screen.getAllByTestId("log-source");
+    expect(first.className).not.toBe(second.className);
+  });
+
+  it("does not prefix anything in a single-pod view", async () => {
+    // A pod name on every line of a single-pod log is pure noise, and
+    // costs a chunk of every line's width.
+    renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emitLines("plain");
+
+    await screen.findByText(/plain/);
+    expect(screen.queryAllByTestId("log-source")).toHaveLength(0);
+  });
+
+  it("lists the pods it is following", async () => {
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-a" });
+    emit({ kind: "podStarted", pod: "api-b" });
+
+    // The heading also carries the workload name, so match loosely.
+    expect(await screen.findByText(/2 pods/)).toBeInTheDocument();
+  });
+
+  it("keeps going when one pod's stream ends", async () => {
+    // During a rollout, old replicas finish while new ones start. One
+    // ending must not read as the whole view being over.
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-old" });
+    emit({ kind: "lines", texts: ["last words"], source: "api-old" });
+    emit({ kind: "podEnded", pod: "api-old" });
+
+    await screen.findByText(/last words/);
+    expect(screen.queryByText("ended")).not.toBeInTheDocument();
+  });
+
+  it("picks up a replica that appears during a rollout", async () => {
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-old" });
+    emit({ kind: "podEnded", pod: "api-old" });
+    emit({ kind: "podStarted", pod: "api-new" });
+    emit({ kind: "lines", texts: ["hello from the new one"], source: "api-new" });
+
+    expect(await screen.findByText(/hello from the new one/)).toBeInTheDocument();
+  });
+
+  it("says when more pods match than are being streamed", async () => {
+    // A merged view quietly missing half the replicas is worse than one
+    // that admits it — the whole point is finding the replica that
+    // differs, and it might be one of the missing ones.
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "capped", streaming: 20, matched: 240 });
+
+    expect(
+      await screen.findByText(/showing 20 of 240 matching pods/),
+    ).toBeInTheDocument();
+  });
+
+  it("filters on the log text, not on the pod name", async () => {
+    // Otherwise typing a replica's name silently becomes a pod filter,
+    // which is a different feature wearing the same box.
+    renderMerged();
+    await waitFor(() => expect(startMergedLogs).toHaveBeenCalled());
+
+    emit({ kind: "podStarted", pod: "api-error-handler" });
+    emit({ kind: "lines", texts: ["all fine here"], source: "api-error-handler" });
+    await screen.findByText(/all fine here/);
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Filter lines"), "error");
+
+    await waitFor(() => expect(renderedLines()).toHaveLength(0));
   });
 });

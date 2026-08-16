@@ -74,3 +74,48 @@ export function hasDataTab(kind: string, apiVersion: string): "config" | "secret
   if (kind === "Secret") return "secret";
   return null;
 }
+
+/// Kinds whose pods a merged log view can stream.
+///
+/// A short list rather than "anything with a selector": a Service also
+/// has one, and offering Logs on a Service would promise something the
+/// tab does not do — it streams pods, not traffic.
+const LOGGABLE_WORKLOADS = new Set([
+  "Deployment",
+  "StatefulSet",
+  "DaemonSet",
+  "ReplicaSet",
+  "Job",
+]);
+
+/// The label selector a workload's pods carry, read out of its YAML.
+///
+/// Read from the text rather than from a parsed document because the
+/// detail payload already carries the YAML and nothing else needs a
+/// parser. Returns the API server's own selector syntax — `a=b,c=d` —
+/// which is what the merged log command expects.
+///
+/// Only `matchLabels` is read. `matchExpressions` is deliberately not
+/// translated: a selector that is nearly right would stream the wrong
+/// pods, and streaming none is a much better failure than that.
+export function workloadSelector(kind: string, yaml: string): string | null {
+  if (!LOGGABLE_WORKLOADS.has(kind)) return null;
+
+  const lines = yaml.split("\n");
+  const start = lines.findIndex((l) => /^\s{2}selector:\s*$/.test(l));
+  if (start < 0) return null;
+
+  const match = lines.findIndex(
+    (l, i) => i > start && /^\s{4}matchLabels:\s*$/.test(l),
+  );
+  if (match < 0 || match > start + 3) return null;
+
+  const pairs: string[] = [];
+  for (let i = match + 1; i < lines.length; i += 1) {
+    const found = /^\s{6}([^:\s]+):\s*"?([^"\n]*?)"?\s*$/.exec(lines[i]);
+    if (!found) break;
+    pairs.push(`${found[1]}=${found[2]}`);
+  }
+
+  return pairs.length ? pairs.join(",") : null;
+}
