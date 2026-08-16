@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Channel,
   api,
@@ -7,6 +7,13 @@ import {
   type LogEvent,
 } from "../lib/api";
 import { LogBuffer } from "../lib/logBuffer";
+import {
+  EMPTY_FILTER,
+  compileFilter,
+  highlightSegments,
+  type FilterSpec,
+} from "../lib/logFilter";
+import { FilterIndex, filterKey } from "../lib/logView";
 import { Select } from "./Select";
 
 // Lines are capped so a chatty pod cannot grow memory without bound. The
@@ -46,6 +53,11 @@ const ASSUMED_VIEWPORT = 640;
 /// nudge does not unpin a followed stream.
 const PIN_SLACK = LINE_HEIGHT * 2;
 
+/// Lines of context offered around a match, `grep -C` style. Kept to a
+/// short list rather than a free number: the useful answers are "none",
+/// "enough to see the stack frame either side", and "a bit more".
+const CONTEXT_CHOICES = [0, 2, 5];
+
 interface LogViewerProps {
   namespace: string;
   pod: string;
@@ -82,6 +94,15 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
   const frame = useRef<number | null>(null);
   const [revision, setRevision] = useState(0);
 
+  // Filtering is display-only: it never re-requests the stream, so
+  // narrowing a running log does not interrupt it or lose the lines that
+  // arrive while the pattern is being typed.
+  const [filter, setFilter] = useState<FilterSpec>(EMPTY_FILTER);
+  const [context, setContext] = useState(0);
+  const compiled = useMemo(() => compileFilter(filter), [filter]);
+  const key = useMemo(() => filterKey(filter), [filter]);
+  const index = useRef(new FilterIndex());
+
   // Set while the component is scrolling the element itself, so its own
   // scroll events are not mistaken for the user scrolling away.
   const selfScrolling = useRef(false);
@@ -113,6 +134,9 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     }
     pending.current = [];
     buffer.current.clear();
+    // Absolute indices restart with the buffer, so matches recorded
+    // against the old stream now name different lines.
+    index.current.reset();
     setRevision((r) => r + 1);
     setError(null);
     setStatus("streaming");
@@ -194,8 +218,22 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     return () => observer.disconnect();
   }, []);
 
-  const total = buffer.current.size;
+  // Bringing the match index up to date is keyed on the buffer having
+  // changed, the filter having changed, or the context width having
+  // changed — nothing else can alter what is on screen.
+  const shown = useMemo(() => {
+    index.current.sync(buffer.current, compiled, key);
+    return index.current.visible(buffer.current, compiled, context);
+    // `revision` is the signal that the buffer moved; it is not read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revision, compiled, key, context]);
+
   const dropped = buffer.current.dropped;
+  const retained = buffer.current.size;
+  const firstIndex = buffer.current.firstIndex;
+  // `shown` is null when nothing is being filtered, in which case the
+  // visible sequence is the buffer itself and needs no index array.
+  const total = shown ? shown.length : retained;
 
   const rows = Math.ceil(viewport / LINE_HEIGHT) + OVERSCAN * 2;
   const maxStart = Math.max(0, total - rows);
@@ -203,11 +241,12 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     ? maxStart
     : Math.min(maxStart, Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN));
 
-  const firstIndex = buffer.current.firstIndex;
-  const visible = buffer.current.slice(
-    firstIndex + start,
-    firstIndex + start + rows,
-  );
+  const window: { index: number; text: string }[] = [];
+  for (let p = start; p < Math.min(start + rows, total); p += 1) {
+    const absolute = shown ? shown[p] : firstIndex + p;
+    const text = buffer.current.get(absolute);
+    if (text !== undefined) window.push({ index: absolute, text });
+  }
 
   // Chase the bottom after a flush. Not in the render path: writing
   // scrollTop forces layout, and doing it per line was half the reason
@@ -299,6 +338,78 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
         </span>
       </div>
 
+      {/* The filter row. Everything here narrows what is displayed; none
+          of it touches the stream. */}
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-1.5 text-xs">
+        <input
+          value={filter.include}
+          onChange={(e) => setFilter((f) => ({ ...f, include: e.target.value }))}
+          placeholder={filter.regex ? "Filter (regex)…" : "Filter…"}
+          aria-label="Filter lines"
+          className="min-w-0 flex-1 rounded-sm border bg-content/[0.03] px-2 py-1 transition-colors duration-150 ease-swift placeholder:text-content-muted focus:border-accent/40"
+        />
+        <input
+          value={filter.exclude}
+          onChange={(e) => setFilter((f) => ({ ...f, exclude: e.target.value }))}
+          placeholder="Exclude…"
+          aria-label="Exclude lines"
+          title="Hide lines matching this, the way grep -v would"
+          className="min-w-0 flex-1 rounded-sm border bg-content/[0.03] px-2 py-1 transition-colors duration-150 ease-swift placeholder:text-content-muted focus:border-accent/40"
+        />
+
+        <label
+          className="flex shrink-0 items-center gap-1.5 text-2xs text-content-secondary"
+          title="Treat both patterns as regular expressions"
+        >
+          <input
+            type="checkbox"
+            checked={filter.regex}
+            onChange={(e) => setFilter((f) => ({ ...f, regex: e.target.checked }))}
+          />
+          Regex
+        </label>
+        <label
+          className="flex shrink-0 items-center gap-1.5 text-2xs text-content-secondary"
+          title="Match case"
+        >
+          <input
+            type="checkbox"
+            checked={filter.caseSensitive}
+            onChange={(e) =>
+              setFilter((f) => ({ ...f, caseSensitive: e.target.checked }))
+            }
+          />
+          Aa
+        </label>
+
+        <Select
+          value={String(context)}
+          onChange={(v) => setContext(Number(v))}
+          title="Lines of context to show either side of a match"
+        >
+          {CONTEXT_CHOICES.map((n) => (
+            <option key={n} value={n}>
+              {n === 0 ? "No context" : `±${n} lines`}
+            </option>
+          ))}
+        </Select>
+
+        {compiled.active && (
+          <span className="shrink-0 text-2xs tabular-nums text-content-muted">
+            {index.current.matchCount} of {retained}
+          </span>
+        )}
+      </div>
+
+      {compiled.error && (
+        <div className="animate-fade-in border-b border-warn/20 bg-warn/[0.08] px-4 py-1.5 text-2xs text-warn">
+          {/* Showing everything, not nothing: a regex is invalid for most
+              of the time it is being typed, and blanking the view reads
+              as a pod that went silent. */}
+          Not a valid pattern ({compiled.error}) — showing every line.
+        </div>
+      )}
+
       {error && (
         <div className="animate-fade-in border-b border-danger/20 bg-danger/[0.08] px-4 py-2 text-xs text-danger">
           {error}
@@ -313,7 +424,11 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
       >
         {total === 0 ? (
           <span className="text-content-muted">
-            {status === "streaming" ? "" : "No output."}
+            {compiled.active && retained > 0
+              ? "No lines match."
+              : status === "streaming"
+                ? ""
+                : "No output."}
           </span>
         ) : (
           // The spacer carries the full height so the scrollbar reflects
@@ -326,14 +441,28 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
               style={{ transform: `translateY(${start * LINE_HEIGHT}px)` }}
               className="absolute left-0 top-0 w-full"
             >
-              {visible.map((text, i) => (
+              {window.map(({ index: absolute, text }) => (
                 <div
-                  key={firstIndex + start + i}
+                  key={absolute}
                   data-testid="log-line"
                   style={{ height: LINE_HEIGHT, lineHeight: `${LINE_HEIGHT}px` }}
                   className="whitespace-pre"
                 >
-                  {text}
+                  {/* Matches are marked in place rather than merely
+                      surviving the filter — with context lines on, the
+                      line that matched has to be findable among them. */}
+                  {highlightSegments(text, compiled.highlight).map((seg, i) =>
+                    seg.match ? (
+                      <mark
+                        key={i}
+                        className="rounded-[2px] bg-warn/30 text-[rgb(var(--code-fg))]"
+                      >
+                        {seg.text}
+                      </mark>
+                    ) : (
+                      <span key={i}>{seg.text}</span>
+                    ),
+                  )}
                 </div>
               ))}
             </div>

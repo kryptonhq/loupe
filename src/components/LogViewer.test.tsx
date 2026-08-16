@@ -186,7 +186,7 @@ describe("LogViewer", () => {
     emitLines("from-app");
     await screen.findByText(/from-app/);
 
-    await user.selectOptions(screen.getByRole("combobox"), "sidecar");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Container" }), "sidecar");
     await waitFor(() => expect(startPodLogs).toHaveBeenCalledTimes(2));
 
     expect(screen.queryByText(/from-app/)).not.toBeInTheDocument();
@@ -196,7 +196,9 @@ describe("LogViewer", () => {
   it("offers no container picker for a single-container pod", () => {
     // The overwhelmingly common case; a select with one option is noise.
     renderViewer();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Container" }),
+    ).not.toBeInTheDocument();
   });
 
   it("says so when a container produced nothing", async () => {
@@ -283,6 +285,148 @@ describe("LogViewer", () => {
     expect(renderedLines()).toEqual(["first", "second", "third"]);
   });
 
+  // Filtering. All of it is display-only: narrowing a running log must
+  // never restart the stream, or the lines you were reading vanish and
+  // the ones that arrived while you typed are lost.
+
+  it("narrows to matching lines without touching the stream", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalledTimes(1));
+
+    emitLines("GET /api 200", "GET /healthz 200", "GET /api 500");
+    await screen.findByText("GET /api 200");
+
+    await user.type(screen.getByLabelText("Filter lines"), "/api");
+
+    await waitFor(() => expect(renderedLines()).toHaveLength(2));
+    expect(renderedLines()).toEqual(["GET /api 200", "GET /api 500"]);
+    // The stream is untouched: one call, still the original.
+    expect(startPodLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps filtering lines that arrive after the filter is set", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("keep me");
+    await screen.findByText("keep me");
+    await user.type(screen.getByLabelText("Filter lines"), "keep");
+
+    emitLines("drop me", "keep me too");
+    await waitFor(() => expect(renderedLines()).toHaveLength(2));
+
+    expect(renderedLines()).toEqual(["keep me", "keep me too"]);
+  });
+
+  it("hides lines matching the exclusion", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("request /api", "request /healthz");
+    await screen.findByText("request /api");
+
+    await user.type(screen.getByLabelText("Exclude lines"), "healthz");
+
+    await waitFor(() => expect(renderedLines()).toHaveLength(1));
+    expect(renderedLines()).toEqual(["request /api"]);
+  });
+
+  it("marks the matched text inside the line", async () => {
+    // With context lines on, surviving the filter is no longer enough to
+    // tell you which line actually matched.
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("level=error msg=boom");
+    await screen.findByText(/level=/);
+
+    await user.type(screen.getByLabelText("Filter lines"), "error");
+
+    const marked = await screen.findByText("error", { selector: "mark" });
+    expect(marked).toBeInTheDocument();
+  });
+
+  it("shows the lines around a match when context is asked for", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("before", "the failure", "after", "unrelated", "unrelated");
+    await screen.findByText("before");
+
+    await user.type(screen.getByLabelText("Filter lines"), "failure");
+    await waitFor(() => expect(renderedLines()).toEqual(["the failure"]));
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /context/i }),
+      "2",
+    );
+
+    await waitFor(() =>
+      expect(renderedLines()).toEqual([
+        "before",
+        "the failure",
+        "after",
+        "unrelated",
+      ]),
+    );
+  });
+
+  it("counts the matches against what it is holding", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("hit", "miss", "hit");
+    await screen.findByText("miss");
+
+    await user.type(screen.getByLabelText("Filter lines"), "hit");
+    expect(await screen.findByText("2 of 3")).toBeInTheDocument();
+  });
+
+  it("says so when a filter matches nothing", async () => {
+    // Distinct from "No output." — the pod said plenty, the filter is
+    // simply too narrow, and conflating the two sends people looking for
+    // a problem in the wrong place.
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("something");
+    await screen.findByText("something");
+
+    await user.type(screen.getByLabelText("Filter lines"), "nothing matches this");
+    expect(await screen.findByText("No lines match.")).toBeInTheDocument();
+  });
+
+  it("reports an invalid regex and keeps showing the log", async () => {
+    // A regex is invalid for most of the time it is being typed. Going
+    // blank on every keystroke is unusable, and reads as a dead pod.
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("still here");
+    await screen.findByText("still here");
+
+    await user.click(screen.getByRole("checkbox", { name: /Regex/ }));
+    await user.type(screen.getByLabelText("Filter lines"), "GET /(health");
+
+    expect(await screen.findByText(/Not a valid pattern/)).toBeInTheDocument();
+    expect(renderedLines()).toEqual(["still here"]);
+  });
+
+  it("treats a plain filter as text, not as a pattern", async () => {
+    // Log lines are full of regex metacharacters. Typing an IP address
+    // should find that IP address.
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("peer 10.0.0.1 up", "peer 10x0y0z1 up");
+    await screen.findByText(/10\.0\.0\.1/);
+
+    await user.type(screen.getByLabelText("Filter lines"), "10.0.0.1");
+
+    await waitFor(() => expect(renderedLines()).toHaveLength(1));
+    expect(renderedLines()).toEqual(["peer 10.0.0.1 up"]);
+  });
+
   it("drops lines still queued when the stream restarts", async () => {
     // Lines that arrived for the old container must not land under the
     // new one's heading after the switch.
@@ -291,7 +435,7 @@ describe("LogViewer", () => {
 
     // Emitted without awaiting a flush, so they are still queued.
     emitLines("stale-from-app");
-    await user.selectOptions(screen.getByRole("combobox"), "sidecar");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Container" }), "sidecar");
     await waitFor(() => expect(startPodLogs).toHaveBeenCalledTimes(2));
 
     emitLines("fresh-from-sidecar");
