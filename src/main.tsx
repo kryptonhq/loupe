@@ -28,7 +28,11 @@ const queryClient = new QueryClient({
       // immediately — but it stays on screen while the refetch runs,
       // which is the whole point: no blank tables between refreshes.
       staleTime: 0,
-      refetchInterval: 10_000,
+      // No fixed refetch interval. Listings are kept fresh by a watch
+      // (see lib/useWatch), which costs one LIST and then deltas instead
+      // of a full LIST every ten seconds per open view — on a cluster
+      // with thousands of pods that timer was the single largest cost in
+      // the app, and it ran whether or not anything had changed.
       refetchOnWindowFocus: true,
       // Kubernetes errors are usually terminal for the request — an
       // RBAC denial or a missing pod will not succeed on retry, and

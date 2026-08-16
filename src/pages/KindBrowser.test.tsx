@@ -13,8 +13,15 @@ vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
   return {
     ...actual,
+    // Listings hold a watch now, and Tauri's own Channel reaches into
+    // webview internals that do not exist here.
+    Channel: class {
+      onmessage?: (event: unknown) => void;
+    },
     api: {
       ...actual.api,
+      startWatch: vi.fn().mockResolvedValue(1),
+      stopWatch: vi.fn().mockResolvedValue(true),
       listTable: vi.fn(),
       getObject: vi.fn(),
       listNamespaces: vi.fn(),

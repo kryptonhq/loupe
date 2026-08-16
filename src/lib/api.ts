@@ -429,6 +429,22 @@ export interface MergedLogOptions {
   timestamps: boolean;
 }
 
+/// What happened to one object in a watched kind.
+export type WatchEvent =
+  | {
+      kind: "changed";
+      change: "applied" | "deleted";
+      name: string;
+      namespace: string | null;
+    }
+  /// The watch relisted — the resourceVersion aged out, or the
+  /// connection dropped and came back. Anything cached from before is
+  /// suspect and should be refetched wholesale rather than patched.
+  | { kind: "reset" }
+  /// The watch could not be kept up. A view that has quietly stopped
+  /// updating is worse than one that says it has.
+  | { kind: "failed"; message: string };
+
 /// What a forward points at. A Service target survives a rollout: the
 /// pod is resolved per connection, so the next one picks a live pod.
 export type ForwardTarget =
@@ -593,6 +609,14 @@ export const api = {
   /// Deployment's logs are the interleaved logs of its replicas.
   startMergedLogs: (options: MergedLogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_merged_logs", { options, channel }),
+
+  /// Watches a kind. Replaces polling: one LIST and then deltas.
+  startWatch: (
+    resource: GvkRef,
+    namespace: string | null,
+    channel: Channel<WatchEvent>,
+  ) => invoke<number>("start_watch", { resource, namespace, channel }),
+  stopWatch: (id: number) => invoke<boolean>("stop_watch", { id }),
 
   /// Starts forwarding a local port into the cluster. Rejects when the
   /// local port is taken, before the forward is listed.

@@ -6,6 +6,7 @@ import { type Column } from "./Table";
 import { Select } from "./Select";
 import { StatusDot } from "./StatusDot";
 import { api, type GvkRef, type TableRow } from "../lib/api";
+import { useWatch } from "../lib/useWatch";
 import { statusTone } from "../pages/ObjectDetail";
 
 // A listing for any kind, with the columns the API server printed.
@@ -79,6 +80,12 @@ export function TableBrowser({
   const rows = useMemo(() => pages.flatMap((p) => p.rows), [pages]);
   const lastPage = pages[pages.length - 1];
 
+  // Freshness comes from a watch rather than a timer: nothing is
+  // fetched until something actually changes, and a rollout's worth of
+  // events coalesces into one refetch.
+  const watchKey = ["table", resource.group, resource.version, resource.kind, namespace];
+  const watch = useWatch(resource, namespace || null, watchKey);
+
   const namespaces = useQuery({
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
@@ -136,7 +143,21 @@ export function TableBrowser({
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
-      actions={actions}
+      actions={
+        <>
+          {/* Said out loud when it is not: a listing that has quietly
+              stopped updating is worse than one that admits it. */}
+          {watch.error && (
+            <span
+              className="shrink-0 text-2xs text-warn"
+              title={`${watch.error} — the listing still works, but will not update by itself`}
+            >
+              not live
+            </span>
+          )}
+          {actions}
+        </>
+      }
     >
       <ResourceTable
         columns={columns}

@@ -73,6 +73,9 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // A forward into a cluster the user believes they left is a hole
     // they no longer know is open.
     forwards().stop_all().await;
+    // A watch against a cluster the user has left is an open connection
+    // they no longer know about.
+    watches().stop_all().await;
     session.inner().clear().await;
     Ok(())
 }
@@ -474,6 +477,33 @@ async fn stop_forward(id: u64) -> Result<bool> {
     Ok(forwards().stop(id).await)
 }
 
+/// Watches a kind, pushing a signal whenever an object changes.
+///
+/// Replaces the fixed ten-second refetch: one LIST and then deltas,
+/// which is both cheaper and fresher than asking again on a timer.
+#[tauri::command]
+async fn start_watch(
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    channel: tauri::ipc::Channel<cluster::watch::WatchEvent>,
+) -> Result<u64> {
+    cluster::watch::start(session.inner(), watches(), resource, namespace, channel).await
+}
+
+/// Stops a watch. False means it had already stopped by itself.
+#[tauri::command]
+async fn stop_watch(id: u64) -> Result<bool> {
+    Ok(watches().stop(id).await)
+}
+
+/// Open watches. A process singleton for the same reason as the other
+/// registries: the tasks must outlive the command that started them.
+fn watches() -> &'static cluster::watch::Watches {
+    static WATCHES: std::sync::OnceLock<cluster::watch::Watches> = std::sync::OnceLock::new();
+    WATCHES.get_or_init(cluster::watch::Watches::default)
+}
+
 /// Active forwards. A process singleton for the same reason as the log
 /// and terminal registries: the listeners must outlive the command that
 /// created them.
@@ -579,6 +609,8 @@ pub fn run() {
             start_pod_logs,
             start_merged_logs,
             stop_pod_logs,
+            start_watch,
+            stop_watch,
             start_forward,
             list_forwards,
             stop_forward,
