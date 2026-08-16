@@ -404,6 +404,16 @@ export type LogEvent =
   | { kind: "ended" }
   | { kind: "failed"; message: string };
 
+/// Progress from a node drain. Per-pod because a drain is a sequence of
+/// independent evictions, several of which are expected to be skipped
+/// and any of which may be refused by a PodDisruptionBudget.
+export type DrainEvent =
+  | { kind: "started"; pods: number }
+  | { kind: "evicted"; pod: string }
+  | { kind: "skipped"; pod: string; reason: string }
+  | { kind: "failed"; pod: string; message: string }
+  | { kind: "finished"; evicted: number; skipped: number; failed: number };
+
 export const api = {
   listContexts: () => invoke<ContextInfo[]>("list_contexts"),
   connect: (context: string) => invoke<ClusterInfo>("connect", { context }),
@@ -473,6 +483,31 @@ export const api = {
   /// `reveal`, so checking one does not put the rest on screen.
   getSecretData: (namespace: string, name: string, reveal: string[] = []) =>
     invoke<ResourceData>("get_secret_data", { namespace, name, reveal }),
+
+  /// Sets a workload's replica count through the scale subresource.
+  scaleObject: (
+    resource: GvkRef,
+    namespace: string | null,
+    name: string,
+    replicas: number,
+  ) => invoke<number>("scale_object", { resource, namespace, name, replicas }),
+
+  /// Rolls a workload by touching its pod template, the way
+  /// `kubectl rollout restart` does. Resolves with the stamp written.
+  rolloutRestart: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<string>("rollout_restart", { resource, namespace, name }),
+
+  deleteObject: (resource: GvkRef, namespace: string | null, name: string) =>
+    invoke<void>("delete_object", { resource, namespace, name }),
+
+  setNodeSchedulable: (node: string, schedulable: boolean) =>
+    invoke<boolean>("set_node_schedulable", { node, schedulable }),
+
+  /// Evicts the pods on a node. Progress arrives on `channel`, because a
+  /// drain can take minutes and a silent spinner is indistinguishable
+  /// from a hang.
+  drainNode: (node: string, channel: Channel<DrainEvent>) =>
+    invoke<void>("drain_node", { node, channel }),
 
   /// Writes an edited object back as a full replace. Rejects an edit
   /// whose identity no longer matches `target`, and one based on a

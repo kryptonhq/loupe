@@ -13,6 +13,7 @@ import {
 } from "../components/Field";
 import { DataView } from "../components/DataView";
 import { RelatedPanel } from "../components/RelatedPanel";
+import { ObjectActions } from "../components/ObjectActions";
 import { hasDataTab } from "../lib/kinds";
 import { api, type GvkRef, type RelatedObject } from "../lib/api";
 import { OverviewSkeleton } from "./PodDetail";
@@ -93,6 +94,18 @@ export function ObjectDetail({
   });
   const object = q.data;
 
+  // Verbs the API server reports for this kind. Used to hide actions
+  // rather than to offer buttons that are guaranteed to be refused.
+  // Shared cache key with the sidebar, so this costs no extra discovery.
+  const discovery = useQuery({
+    queryKey: ["api-resources"],
+    queryFn: () => api.listApiResources(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const verbs = discovery.data?.find(
+    (r) => r.kind === resource.kind && r.group === resource.group,
+  )?.verbs;
+
   // ConfigMaps and Secrets are opened to read their contents, so those
   // get a tab of their own rather than sending people to the YAML.
   const dataKind = object ? hasDataTab(object.kind, object.apiVersion) : null;
@@ -124,6 +137,20 @@ export function ObjectDetail({
       onClose={onClose}
       backTo={backTo}
       error={q.error}
+      actions={
+        object && (
+          <ObjectActions
+            resource={resource}
+            namespace={namespace}
+            name={name}
+            verbs={verbs}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: key });
+              queryClient.invalidateQueries({ queryKey: ["table"] });
+            }}
+          />
+        )
+      }
     >
       {tab === "overview" &&
         (object ? (

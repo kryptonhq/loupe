@@ -7,6 +7,7 @@
 //! rule the in-cluster control plane follows, arrived at from the other
 //! direction.
 
+pub mod actions;
 pub mod data;
 pub mod detail;
 pub mod discovery;

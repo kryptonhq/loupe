@@ -246,6 +246,74 @@ async fn apply_yaml(
     cluster::edit::apply_yaml(session.inner(), target, &yaml).await
 }
 
+/// Sets a workload's replica count through the scale subresource.
+#[tauri::command]
+async fn scale_object(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+    replicas: i32,
+) -> Result<i32> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::scale(session.inner(), resource, namespace, &name, replicas).await
+}
+
+/// Rolls a workload by touching its pod template, the way
+/// `kubectl rollout restart` does.
+#[tauri::command]
+async fn rollout_restart(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<String> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::rollout_restart(session.inner(), resource, namespace, &name).await
+}
+
+#[tauri::command]
+async fn delete_object(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    resource: cluster::discovery::GvkRef,
+    namespace: Option<String>,
+    name: String,
+) -> Result<()> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::delete_object(session.inner(), resource, namespace, &name).await
+}
+
+/// Cordons or uncordons a node.
+#[tauri::command]
+async fn set_node_schedulable(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    node: String,
+    schedulable: bool,
+) -> Result<bool> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::set_node_schedulable(session.inner(), &node, schedulable).await
+}
+
+/// Evicts the pods on a node, reporting each one on `channel`.
+///
+/// A drain can take minutes; a spinner that says nothing for minutes is
+/// indistinguishable from a hang, so progress is streamed rather than
+/// summarised at the end.
+#[tauri::command]
+async fn drain_node(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    node: String,
+    channel: tauri::ipc::Channel<cluster::actions::DrainEvent>,
+) -> Result<()> {
+    guard_writes(&app, session.inner()).await?;
+    cluster::actions::drain(session.inner(), &node, channel).await
+}
+
 /// Refuses a write when the connected context is marked read-only.
 ///
 /// Not connected is left to the operation itself to report — it has a
@@ -405,6 +473,11 @@ pub fn run() {
             get_secret_data,
             list_related,
             apply_yaml,
+            scale_object,
+            rollout_restart,
+            delete_object,
+            set_node_schedulable,
+            drain_node,
             list_helm_releases,
             get_helm_release,
             start_pod_logs,

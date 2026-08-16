@@ -5,6 +5,7 @@ import { StatusDot, phaseTone } from "../components/StatusDot";
 import { Chip } from "../components/Chip";
 import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
+import { ObjectActions } from "../components/ObjectActions";
 import { EventsTable } from "../components/EventsTable";
 import { Field, PairChips, Section } from "../components/Field";
 import { SkeletonBlock } from "../components/Skeleton";
@@ -90,6 +91,19 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
       onClose={onClose}
       backTo="pods"
       error={q.error}
+      actions={
+        pod && (
+          <ObjectActions
+            resource={{ group: "", version: "v1", kind: "Pod" }}
+            namespace={namespace}
+            name={name}
+            onDone={() => {
+              queryClient.invalidateQueries({ queryKey: ["pods"] });
+              onClose();
+            }}
+          />
+        )
+      }
     >
       {tab === "overview" &&
         (pod ? (

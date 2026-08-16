@@ -52,6 +52,10 @@ window-vibrancy = "0.8.0"
 # reach. See src/export.rs, and the note in lib.rs on why this plugin is
 # carried when tauri-plugin-opener was not.
 tauri-plugin-dialog = "2"
+# Only for the RFC3339 stamp `kubectl rollout restart` writes into a pod
+# template. k8s-openapi is built without default features, so its chrono
+# re-export is not available.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 
