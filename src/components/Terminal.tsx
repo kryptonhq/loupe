@@ -48,12 +48,34 @@ const MIN_ROWS = 5;
 /// with an alpha; xterm wants a colour string. Falls back rather than
 /// throwing, since a terminal with slightly wrong colours beats no
 /// terminal.
-function cssColour(token: string, fallback: string): string {
+function cssColour(token: string, fallback: string, alpha?: number): string {
   if (typeof getComputedStyle !== "function") return fallback;
   const value = getComputedStyle(document.documentElement)
     .getPropertyValue(token)
     .trim();
-  return value ? `rgb(${value})` : fallback;
+  if (!value) return fallback;
+  return alpha === undefined ? `rgb(${value})` : `rgba(${value} / ${alpha})`;
+}
+
+/// The terminal's palette, taken from the app's own tokens.
+///
+/// The cursor is the reason this is a function rather than a literal.
+/// xterm defaults it to white, which is invisible on a light background
+/// — so it has to be named explicitly, and it has to be re-read when the
+/// appearance changes rather than frozen at whatever it was on mount.
+export function terminalTheme() {
+  const foreground = cssColour("--code-fg", "#d4d4d4");
+  const background = cssColour("--code-bg", "#1e1e1e");
+  return {
+    background,
+    foreground,
+    // Same colour as the text, so it contrasts with the background in
+    // both appearances by construction.
+    cursor: foreground,
+    // What shows *through* a block cursor sitting over a character.
+    cursorAccent: background,
+    selectionBackground: cssColour("--accent", "rgba(120,140,255,0.3)", 0.3),
+  };
 }
 
 export function Terminal({
@@ -123,10 +145,7 @@ function ShellSession({
       // Taken from the app's own palette rather than left transparent:
       // xterm ignores an alpha background unless `allowTransparency` is
       // on, and the result is a black rectangle in light mode.
-      theme: {
-        background: cssColour("--code-bg", "#1e1e1e"),
-        foreground: cssColour("--code-fg", "#d4d4d4"),
-      },
+      theme: terminalTheme(),
       // Bounded for the same reason the log viewer is: a command that
       // prints forever must not grow memory without limit.
       scrollback: 5000,
@@ -155,6 +174,26 @@ function ShellSession({
   );
 
   const { ref, instance } = useXTerm({ options, addons, listeners });
+
+  // Follows the appearance while the terminal is open. The palette is
+  // set once at construction — `options` has to keep its identity — so
+  // switching to light mode would otherwise leave a dark terminal with
+  // an invisible cursor until the tab was reopened.
+  useEffect(() => {
+    if (!instance || typeof MutationObserver === "undefined") return;
+
+    const apply = () => {
+      instance.options.theme = terminalTheme();
+    };
+    // Tailwind runs with darkMode:"class", so the class on <html> is
+    // what actually switches the palette.
+    const observer = new MutationObserver(apply);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, [instance]);
 
   useEffect(() => {
     if (!instance || !container) return;

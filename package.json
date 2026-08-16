@@ -37,5 +37,10 @@
     "typescript": "~7.0.2",
     "vite": "^7.0.4",
     "vitest": "^3.2.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "nanoid": ">=3.3.18"
+    }
   }
 }

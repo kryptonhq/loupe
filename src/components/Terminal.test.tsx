@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // type definitions and works the same way the app's own imports do.
 import terminalSource from "./Terminal.tsx?raw";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { Terminal } from "./Terminal";
+import { Terminal, terminalTheme } from "./Terminal";
 import { ClusterContext } from "../lib/clusterContext";
 import { api, type ContainerView, type ExecEvent, type Guard } from "../lib/api";
 
@@ -26,6 +26,9 @@ const cleared = { count: 0 };
 const instance = {
   cols: 80,
   rows: 24,
+  // xterm exposes the live palette here; the component writes to it when
+  // the appearance changes.
+  options: { theme: undefined as unknown },
   write: (data: string) => written.push(data),
   focus: vi.fn(),
   clear: () => {
@@ -368,6 +371,34 @@ describe("Terminal", () => {
 
     expect(await screen.findByText("/bin/sh")).toBeInTheDocument();
     expect(screen.queryByText("opening a shell…")).not.toBeInTheDocument();
+  });
+
+  it("gives the cursor a colour, so it is visible in light mode", () => {
+    // Regression. xterm defaults the cursor to white, which is invisible
+    // on a light background — the terminal worked and simply appeared to
+    // have no cursor. Naming it after the foreground makes it contrast
+    // with the background in both appearances by construction.
+    const theme = terminalTheme();
+    expect(theme.cursor).toBeTruthy();
+    expect(theme.cursor).toBe(theme.foreground);
+    expect(theme.cursor).not.toBe(theme.background);
+    // And what shows through a block cursor is the background, or the
+    // character under it disappears.
+    expect(theme.cursorAccent).toBe(theme.background);
+  });
+
+  it("re-reads the palette when the appearance changes", async () => {
+    // The palette is fixed at construction because `options` has to keep
+    // its identity, so switching to light mode would otherwise leave a
+    // dark terminal — and an invisible cursor — until the tab reopened.
+    setup();
+    await waitFor(() => expect(startExec).toHaveBeenCalled());
+
+    const before = instance.options.theme;
+    document.documentElement.classList.add("dark");
+    await waitFor(() => expect(instance.options.theme).not.toBe(before));
+
+    document.documentElement.classList.remove("dark");
   });
 
   it("imports xterm's stylesheet itself", () => {

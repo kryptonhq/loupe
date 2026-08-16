@@ -45,6 +45,16 @@ function escape(literal: string): string {
 
 function build(pattern: string, spec: FilterSpec): RegExp {
   const source = spec.regex ? pattern : escape(pattern);
+  // A pattern built from input is the feature: the user asked to filter
+  // their own logs by a regex they typed, in their own desktop app. The
+  // input is not attacker-controlled — it is the operator, and the same
+  // regex typed into `grep` would behave the same way. Untrusted text
+  // never reaches here: cluster output is only ever *matched against*,
+  // never compiled.
+  //
+  // A pathological pattern can still stall the filter, which is bounded
+  // by the 5,000-line buffer and recoverable by clearing the box.
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   return new RegExp(source, spec.caseSensitive ? "g" : "gi");
 }
 

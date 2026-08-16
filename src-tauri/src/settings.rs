@@ -287,7 +287,10 @@ mod tests {
 
     #[test]
     fn recents_and_pins_survive_a_write_and_a_read() {
-        let dir = std::env::temp_dir().join(format!("loupe-ctx-{}", std::process::id()));
+        // The shared TempDir helper below, rather than reaching for
+        // `env::temp_dir` again: it fails closed on a path something
+        // else already made, and cleans up even when the test panics.
+        let dir = TempDir::new("contexts");
         let path = dir.join("settings.json");
 
         let mut settings = Settings::default();
@@ -296,7 +299,6 @@ mod tests {
         write_to(&path, &settings).expect("write");
 
         assert_eq!(read_from(&path), settings);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
