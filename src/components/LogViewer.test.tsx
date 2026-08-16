@@ -21,12 +21,37 @@ vi.mock("../lib/api", async (original) => {
     Channel: class {
       onmessage?: (event: LogEvent) => void;
     },
-    api: { ...actual.api, startPodLogs: vi.fn(), stopPodLogs: vi.fn() },
+    api: {
+      ...actual.api,
+      startPodLogs: vi.fn(),
+      stopPodLogs: vi.fn(),
+      saveText: vi.fn(),
+    },
   };
 });
 
 const startPodLogs = vi.mocked(api.startPodLogs);
 const stopPodLogs = vi.mocked(api.stopPodLogs);
+const saveText = vi.mocked(api.saveText);
+
+/// jsdom has no clipboard. Stands in for one, and records what was put
+/// on it so the export can be asserted against.
+const clipboard = { text: "" };
+
+/// Installs the stand-in. Must run *after* `userEvent.setup()`, which
+/// installs a clipboard stub of its own and would otherwise win.
+function stubClipboard(writeText?: () => Promise<never>) {
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText:
+        writeText ??
+        (async (text: string) => {
+          clipboard.text = text;
+        }),
+    },
+  });
+}
 
 /// Captures the channel each stream was opened with, so a test can push
 /// lines down it the way the Rust side would.
@@ -47,7 +72,9 @@ function renderViewer(containers = [container("app")]) {
   render(
     <LogViewer namespace="kube-system" pod="coredns-abc" containers={containers} />,
   );
-  return userEvent.setup();
+  const user = userEvent.setup();
+  stubClipboard();
+  return user;
 }
 
 /// Pushes an event down the most recently opened channel, the way the
@@ -74,6 +101,10 @@ beforeEach(() => {
   channels = [];
   startPodLogs.mockReset();
   stopPodLogs.mockReset();
+  saveText.mockReset();
+  saveText.mockResolvedValue("/tmp/coredns.log");
+
+  clipboard.text = "";
 
   let nextId = 1;
   startPodLogs.mockImplementation(async (_options, channel) => {
@@ -425,6 +456,119 @@ describe("LogViewer", () => {
 
     await waitFor(() => expect(renderedLines()).toHaveLength(1));
     expect(renderedLines()).toEqual(["peer 10.0.0.1 up"]);
+  });
+
+  // Getting the output back out. A debugging tool that cannot hand you
+  // the evidence sends you to a terminal at the last step.
+
+  it("copies the lines with a header saying where they came from", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("first", "second");
+    await screen.findByText("first");
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(clipboard.text).not.toBe(""));
+    expect(clipboard.text).toContain("kube-system/coredns-abc");
+    expect(clipboard.text).toContain("first\nsecond");
+  });
+
+  it("saves under a name derived from the pod and container", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("something");
+    await screen.findByText("something");
+
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+
+    await waitFor(() => expect(saveText).toHaveBeenCalled());
+    const [name, body] = saveText.mock.calls[0];
+    expect(name).toMatch(/^coredns-abc-app-\d{8}-\d{6}\.log$/);
+    expect(body).toContain("something");
+  });
+
+  it("exports what the filter left, and says that it did", async () => {
+    // Saving a filtered view without recording the filter would produce
+    // a file that misleads whoever opens it later.
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+
+    emitLines("keep this", "drop this");
+    await screen.findByText("keep this");
+    await user.type(screen.getByLabelText("Filter lines"), "keep");
+    await waitFor(() => expect(renderedLines()).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(clipboard.text).not.toBe(""));
+
+    expect(clipboard.text).toContain("keep this");
+    expect(clipboard.text).not.toContain("drop this");
+    expect(clipboard.text).toContain("filter:");
+    expect(clipboard.text).toContain("1 of 2");
+  });
+
+  it("confirms a save with the path it wrote", async () => {
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emitLines("a line");
+    await screen.findByText("a line");
+
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    expect(await screen.findByText(/\/tmp\/coredns\.log/)).toBeInTheDocument();
+  });
+
+  it("says nothing when the user cancels the save dialog", async () => {
+    // Cancelling is an ordinary outcome, not a failure to report.
+    saveText.mockResolvedValue(null);
+
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emitLines("a line");
+    await screen.findByText("a line");
+
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    await waitFor(() => expect(saveText).toHaveBeenCalled());
+
+    expect(screen.queryByText(/Saved/)).not.toBeInTheDocument();
+  });
+
+  it("reports a failed save rather than appearing to have worked", async () => {
+    saveText.mockRejectedValue({
+      kind: "export",
+      message: "write /read-only/x.log: permission denied",
+    });
+
+    const user = renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emitLines("a line");
+    await screen.findByText("a line");
+
+    await user.click(screen.getByRole("button", { name: "Save…" }));
+    expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+  });
+
+  it("says so when the clipboard cannot be reached", async () => {
+    // A button that silently does nothing is worse than one that fails.
+    const user = renderViewer();
+    stubClipboard(() => Promise.reject(new Error("denied")));
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emitLines("a line");
+    await screen.findByText("a line");
+
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await screen.findByText(/Could not reach the clipboard/)).toBeInTheDocument();
+  });
+
+  it("offers nothing to export when there is no output", async () => {
+    renderViewer();
+    await waitFor(() => expect(startPodLogs).toHaveBeenCalled());
+    emit({ kind: "ended" });
+
+    expect(await screen.findByRole("button", { name: "Copy" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save…" })).toBeDisabled();
   });
 
   it("drops lines still queued when the stream restarts", async () => {

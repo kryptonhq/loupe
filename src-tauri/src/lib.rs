@@ -8,6 +8,7 @@
 
 mod cluster;
 mod error;
+mod export;
 mod settings;
 mod vibrancy;
 
@@ -229,6 +230,21 @@ async fn stop_pod_logs(id: u64) -> Result<bool> {
     Ok(log_streams().cancel(id).await)
 }
 
+/// Writes text to a file the user picks, returning the path or None if
+/// they cancelled.
+///
+/// The frontend supplies the text and a suggested name and nothing else
+/// — see `export` for why the path never crosses the boundary.
+#[tauri::command]
+async fn save_text(
+    app: tauri::AppHandle,
+    suggested_name: String,
+    contents: String,
+) -> Result<Option<String>> {
+    let saved = export::save_text(&app, &suggested_name, &contents).await?;
+    Ok(saved.map(|p| p.display().to_string()))
+}
+
 /// The stream registry outlives any single command, and abort handles
 /// must stay reachable to cancel a followed stream, so it is a process
 /// singleton rather than Tauri-managed state.
@@ -265,12 +281,22 @@ struct VibrancyState(bool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // No plugins are registered. `tauri-plugin-opener` came with the
-    // scaffold and was never used: it lets the webview ask the OS to
-    // open an arbitrary URL or path, and Loupe renders strings that come
-    // from the cluster — annotations, chart homepages, CRD fields. A
-    // capability nothing needs is one that cannot be misused later.
+    // One plugin, and it is worth saying why.
+    //
+    // `tauri-plugin-opener` came with the scaffold and was dropped: it
+    // lets the webview ask the OS to open an arbitrary URL or path, and
+    // Loupe renders strings that come from the cluster — annotations,
+    // chart homepages, CRD fields. A capability nothing needs is one
+    // that cannot be misused later.
+    //
+    // `tauri-plugin-dialog` is different in the way that matters. Its
+    // commands are never exposed to the webview — the capability file
+    // grants none of them — and it is driven only from Rust, where the
+    // frontend can pass text and a suggested filename and nothing else.
+    // Every write is behind a dialog the user has to accept, and no
+    // cluster-supplied string can name a destination.
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(SharedSession::default());
             app.manage(VibrancyState(vibrancy::setup(app)));
@@ -302,6 +328,7 @@ pub fn run() {
             get_helm_release,
             start_pod_logs,
             stop_pod_logs,
+            save_text,
             get_settings,
             set_theme,
             vibrancy_enabled,

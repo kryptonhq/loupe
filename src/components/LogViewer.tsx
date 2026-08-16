@@ -14,6 +14,7 @@ import {
   type FilterSpec,
 } from "../lib/logFilter";
 import { FilterIndex, filterKey } from "../lib/logView";
+import { exportBody, exportName, type ExportContext } from "../lib/logExport";
 import { Select } from "./Select";
 
 // Lines are capped so a chatty pod cannot grow memory without bound. The
@@ -71,6 +72,9 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
   const [previous, setPrevious] = useState(false);
   const [status, setStatus] = useState<"idle" | "streaming" | "ended">("idle");
   const [error, setError] = useState<string | null>(null);
+  /// Transient confirmation of a copy or a save. Distinct from `error`,
+  /// which is about the stream.
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Whether the view sticks to the newest line. Distinct from `follow`,
   // which is a property of the stream: scrolling up to read something
@@ -265,6 +269,55 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
     return () => clearTimeout(timer);
   }, [revision, pinned]);
 
+  /// The lines an export should contain: what is on screen, filter and
+  /// all, rather than the whole buffer. "Save what I am looking at" is
+  /// the useful action — and the header records the filter, so the file
+  /// cannot be mistaken for the pod's complete output.
+  function exportable(): { name: string; body: string; lines: number } {
+    const indices =
+      shown ?? Array.from({ length: retained }, (_, i) => firstIndex + i);
+    const lines = indices
+      .map((i) => buffer.current.get(i))
+      .filter((l): l is string => l !== undefined);
+
+    const ctx: ExportContext = {
+      namespace,
+      pod,
+      container,
+      filter,
+      context,
+      timestamps,
+      dropped,
+      retained,
+      written: lines.length,
+      at: new Date(),
+    };
+    return { name: exportName(ctx), body: exportBody(ctx, lines), lines: lines.length };
+  }
+
+  async function copyLog() {
+    const { body, lines } = exportable();
+    try {
+      await navigator.clipboard.writeText(body);
+      setNotice(`Copied ${lines} line${lines === 1 ? "" : "s"}.`);
+    } catch {
+      // Clipboard access can be refused by the webview. Saying so beats
+      // a button that silently does nothing.
+      setNotice("Could not reach the clipboard.");
+    }
+  }
+
+  async function saveLog() {
+    const { name, body, lines } = exportable();
+    try {
+      const path = await api.saveText(name, body);
+      // Null means the user cancelled, which needs no comment.
+      if (path) setNotice(`Saved ${lines} line${lines === 1 ? "" : "s"} to ${path}`);
+    } catch (e) {
+      setNotice(errorMessage(e));
+    }
+  }
+
   function onScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
     setScrollTop(el.scrollTop);
@@ -399,7 +452,39 @@ export function LogViewer({ namespace, pod, containers }: LogViewerProps) {
             {index.current.matchCount} of {retained}
           </span>
         )}
+
+        {/* Both act on what is displayed, so they sit with the filter
+            rather than with the stream controls. */}
+        <button
+          onClick={copyLog}
+          disabled={total === 0}
+          title="Copy what is on screen, with a header recording where it came from"
+          className="shrink-0 rounded-sm border px-1.5 py-0.5 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content disabled:opacity-30"
+        >
+          Copy
+        </button>
+        <button
+          onClick={saveLog}
+          disabled={total === 0}
+          title="Save what is on screen to a file"
+          className="shrink-0 rounded-sm border px-1.5 py-0.5 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content disabled:opacity-30"
+        >
+          Save…
+        </button>
       </div>
+
+      {notice && (
+        <div className="animate-fade-in flex items-center gap-2 border-b bg-content/[0.03] px-4 py-1.5 text-2xs text-content-secondary">
+          <span className="min-w-0 flex-1 truncate">{notice}</span>
+          <button
+            onClick={() => setNotice(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-content-muted transition-colors hover:text-content"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {compiled.error && (
         <div className="animate-fade-in border-b border-warn/20 bg-warn/[0.08] px-4 py-1.5 text-2xs text-warn">

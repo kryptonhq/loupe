@@ -55,6 +55,8 @@ export interface ApiError {
     | "unknown_resource"
     | "invalid_edit"
     | "conflict"
+    | "settings"
+    | "export"
     | "kubernetes";
   message: string;
 }
@@ -433,6 +435,13 @@ export const api = {
   startPodLogs: (options: LogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_pod_logs", { options, channel }),
   stopPodLogs: (id: number) => invoke<boolean>("stop_pod_logs", { id }),
+
+  /// Writes text to a file the user picks. Resolves with the path
+  /// written, or null if they cancelled — an ordinary outcome, not an
+  /// error. The path is chosen in the native dialog; the webview never
+  /// names one.
+  saveText: (suggestedName: string, contents: string) =>
+    invoke<string | null>("save_text", { suggestedName, contents }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setTheme: (theme: Theme) => invoke<Settings>("set_theme", { theme }),

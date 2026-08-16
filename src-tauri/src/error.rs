@@ -44,6 +44,12 @@ pub enum AppError {
     #[error("settings: {0}")]
     Settings(String),
 
+    /// Saving something the user was looking at to a file failed. Its
+    /// own kind because it says nothing about the cluster — the request
+    /// succeeded, the disk is what refused.
+    #[error("save: {0}")]
+    Export(String),
+
     /// The API server rejected or failed the request. Carries the
     /// original message so RBAC denials stay legible to the user.
     #[error("kubernetes: {0}")]
@@ -61,6 +67,7 @@ impl AppError {
             AppError::InvalidEdit(_) => "invalid_edit",
             AppError::Conflict(_) => "conflict",
             AppError::Settings(_) => "settings",
+            AppError::Export(_) => "export",
             AppError::Kube(_) => "kubernetes",
         }
     }
@@ -133,6 +140,7 @@ mod tests {
             (AppError::InvalidEdit("x".into()), "invalid_edit"),
             (AppError::Conflict("x".into()), "conflict"),
             (AppError::Settings("x".into()), "settings"),
+            (AppError::Export("x".into()), "export"),
             (AppError::Kube("x".into()), "kubernetes"),
         ];
 

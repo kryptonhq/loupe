@@ -44,8 +44,14 @@ serde_yaml = "0.9.34"
 # helm binary, which a desktop user may not have installed.
 base64 = "0.23.0"
 flate2 = "1.0"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 window-vibrancy = "0.8.0"
+# The native save dialog, for writing logs out to a file. Driven from
+# Rust rather than exposed to the webview: the frontend hands over text
+# and a suggested name, and never names a path or gains filesystem
+# reach. See src/export.rs, and the note in lib.rs on why this plugin is
+# carried when tauri-plugin-opener was not.
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 
