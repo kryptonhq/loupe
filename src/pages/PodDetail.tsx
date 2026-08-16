@@ -7,10 +7,12 @@ import { DetailShell, type TabSpec } from "../components/DetailShell";
 import { EditableYaml } from "../components/EditableYaml";
 import { ObjectActions } from "../components/ObjectActions";
 import { Terminal } from "../components/Terminal";
+import { StartForward } from "../components/Forwards";
 import { EventsTable } from "../components/EventsTable";
 import { Field, PairChips, Section } from "../components/Field";
 import { SkeletonBlock } from "../components/Skeleton";
 import { api, type ContainerView } from "../lib/api";
+import { containerPorts } from "../lib/kinds";
 
 const TABS: TabSpec[] = [
   { id: "overview", label: "Overview" },
@@ -142,6 +144,13 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
                 </ul>
               </Section>
             )}
+
+            <Section title="Port forward">
+              <StartForward
+                target={{ kind: "pod", namespace, name }}
+                ports={containerPorts(pod.yaml)}
+              />
+            </Section>
 
             <PairChips title="Labels" pairs={pod.labels} />
           </div>

@@ -429,6 +429,25 @@ export interface MergedLogOptions {
   timestamps: boolean;
 }
 
+/// What a forward points at. A Service target survives a rollout: the
+/// pod is resolved per connection, so the next one picks a live pod.
+export type ForwardTarget =
+  | { kind: "pod"; namespace: string; name: string }
+  | { kind: "service"; namespace: string; name: string };
+
+export interface ForwardView {
+  id: number;
+  target: ForwardTarget;
+  localPort: number;
+  remotePort: number;
+  /// Bytes moved both ways, so a forward doing nothing is
+  /// distinguishable from one that is broken.
+  bytes: number;
+  connections: number;
+  /// The last thing that went wrong, kept rather than cleared.
+  lastError: string | null;
+}
+
 /// Output from a running exec session.
 export type ExecEvent =
   | { kind: "output"; data: string }
@@ -574,6 +593,16 @@ export const api = {
   /// Deployment's logs are the interleaved logs of its replicas.
   startMergedLogs: (options: MergedLogOptions, channel: Channel<LogEvent>) =>
     invoke<number>("start_merged_logs", { options, channel }),
+
+  /// Starts forwarding a local port into the cluster. Rejects when the
+  /// local port is taken, before the forward is listed.
+  startForward: (
+    target: ForwardTarget,
+    localPort: number,
+    remotePort: number,
+  ) => invoke<ForwardView>("start_forward", { target, localPort, remotePort }),
+  listForwards: () => invoke<ForwardView[]>("list_forwards"),
+  stopForward: (id: number) => invoke<boolean>("stop_forward", { id }),
 
   /// Opens a shell in a container. Output arrives on `channel`.
   startExec: (options: ExecOptions, channel: Channel<ExecEvent>) =>

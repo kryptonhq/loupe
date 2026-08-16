@@ -70,6 +70,9 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // A terminal left open is a connection to the cluster the user
     // believes they left, and a process still running in a container.
     exec_sessions().close_all().await;
+    // A forward into a cluster the user believes they left is a hole
+    // they no longer know is open.
+    forwards().stop_all().await;
     session.inner().clear().await;
     Ok(())
 }
@@ -446,6 +449,39 @@ async fn close_exec(id: u64) -> Result<bool> {
     Ok(exec_sessions().close(id).await)
 }
 
+/// Starts forwarding a local port into the cluster.
+#[tauri::command]
+async fn start_forward(
+    session: tauri::State<'_, SharedSession>,
+    target: cluster::forward::ForwardTarget,
+    local_port: u16,
+    remote_port: u16,
+) -> Result<cluster::forward::ForwardView> {
+    cluster::forward::start(session.inner(), forwards(), target, local_port, remote_port).await
+}
+
+/// Everything currently forwarding, with live byte and connection
+/// counts — a forward that is doing nothing has to be distinguishable
+/// from one that is broken.
+#[tauri::command]
+async fn list_forwards() -> Result<Vec<cluster::forward::ForwardView>> {
+    Ok(forwards().list().await)
+}
+
+/// Stops a forward and releases the local port.
+#[tauri::command]
+async fn stop_forward(id: u64) -> Result<bool> {
+    Ok(forwards().stop(id).await)
+}
+
+/// Active forwards. A process singleton for the same reason as the log
+/// and terminal registries: the listeners must outlive the command that
+/// created them.
+fn forwards() -> &'static cluster::forward::Forwards {
+    static FORWARDS: std::sync::OnceLock<cluster::forward::Forwards> = std::sync::OnceLock::new();
+    FORWARDS.get_or_init(cluster::forward::Forwards::default)
+}
+
 /// Open terminals, for the same reason the log registry exists: the
 /// handles must outlive the command that created them.
 fn exec_sessions() -> &'static cluster::exec::ExecSessions {
@@ -543,6 +579,9 @@ pub fn run() {
             start_pod_logs,
             start_merged_logs,
             stop_pod_logs,
+            start_forward,
+            list_forwards,
+            stop_forward,
             start_exec,
             write_exec,
             resize_exec,

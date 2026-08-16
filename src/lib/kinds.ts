@@ -119,3 +119,20 @@ export function workloadSelector(kind: string, yaml: string): string | null {
 
   return pairs.length ? pairs.join(",") : null;
 }
+
+/// Container ports declared in a manifest, offered as the sensible
+/// choices when starting a forward.
+///
+/// Read from the YAML the detail payload already carries. Duplicates are
+/// dropped and the order is kept, because the first port declared is
+/// almost always the one anyone wants.
+export function containerPorts(yaml: string): number[] {
+  const found: number[] = [];
+  for (const line of yaml.split("\n")) {
+    const match = /^\s*(?:-\s*)?(?:containerPort|port|targetPort):\s*(\d+)\s*$/.exec(line);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port > 0 && port < 65536 && !found.includes(port)) found.push(port);
+  }
+  return found;
+}

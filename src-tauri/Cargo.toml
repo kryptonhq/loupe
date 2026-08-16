@@ -52,7 +52,7 @@ serde_yaml = "0.9.34"
 # helm binary, which a desktop user may not have installed.
 base64 = "0.23.0"
 flate2 = "1.0"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 window-vibrancy = "0.8.0"
 # The native save dialog, for writing logs out to a file. Driven from
 # Rust rather than exposed to the webview: the frontend hands over text

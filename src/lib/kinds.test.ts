@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { workloadSelector } from "./kinds";
+import { containerPorts, workloadSelector } from "./kinds";
 
 // The selector a merged log view streams by. Read out of the YAML the
 // detail payload already carries, so nothing else needs a parser.
@@ -99,5 +99,48 @@ describe("workloadSelector", () => {
           app: wrong
 `;
     expect(workloadSelector("Deployment", yaml)).toBeNull();
+  });
+});
+
+describe("containerPorts", () => {
+  it("finds the ports a manifest declares", () => {
+    const yaml = `spec:
+  containers:
+    - name: api
+      ports:
+        - containerPort: 8080
+        - containerPort: 9090
+`;
+    expect(containerPorts(yaml)).toEqual([8080, 9090]);
+  });
+
+  it("keeps declaration order, because the first is usually the one wanted", () => {
+    const yaml = "ports:\n  - containerPort: 9090\n  - containerPort: 8080\n";
+    expect(containerPorts(yaml)).toEqual([9090, 8080]);
+  });
+
+  it("lists a port once however many times it appears", () => {
+    const yaml = `spec:
+  ports:
+    - port: 80
+      targetPort: 80
+`;
+    expect(containerPorts(yaml)).toEqual([80]);
+  });
+
+  it("ignores anything outside the port range", () => {
+    // A resource limit or a UID is not a port.
+    const yaml = "port: 0\nport: 70000\ncontainerPort: 443\n";
+    expect(containerPorts(yaml)).toEqual([443]);
+  });
+
+  it("ignores a named targetPort", () => {
+    // `targetPort: http` is a name, not a number, and forwarding to it
+    // would need resolving against the pod.
+    expect(containerPorts("targetPort: http\n")).toEqual([]);
+  });
+
+  it("returns nothing for a manifest with no ports", () => {
+    expect(containerPorts("metadata:\n  name: x\n")).toEqual([]);
   });
 });

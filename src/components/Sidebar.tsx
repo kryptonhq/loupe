@@ -6,6 +6,7 @@ import { KIND_SECTIONS, type KindEntry } from "../lib/kinds";
 import { ThemePicker } from "./ThemePicker";
 import type { Theme } from "../lib/theme";
 import { Select } from "./Select";
+import { ForwardsPanel } from "./Forwards";
 import { api, type ApiResourceInfo, type ClusterInfo, type Guard } from "../lib/api";
 
 /// Which pane the main area is showing.
@@ -344,6 +345,10 @@ export function Sidebar({
           onSelect={() => onSelect({ type: "helm" })}
         />
       </nav>
+
+      {/* Above the theme picker: a running forward is state the user is
+          holding, and it belongs where they will notice it. */}
+      {cluster && <ForwardsPanel />}
 
       <div className="border-t p-2">
         <ThemePicker theme={theme} onChange={onThemeChange} />
