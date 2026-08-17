@@ -27,6 +27,11 @@ interface ListProps<T> {
   onOpen: (target: T, intent: OpenIntent) => void;
 }
 
+/// Worst first. Sorting a status column alphabetically puts Failed
+/// beside Pending by accident and Running between them; this orders by
+/// what the tone already says about how much attention it wants.
+const PHASE_ORDER = ["danger", "warn", "ok", "unknown"] as const;
+
 export function Nodes({ onOpen }: ListProps<NodeSummary>) {
   const q = useQuery({
     queryKey: ["nodes"],
@@ -34,7 +39,7 @@ export function Nodes({ onOpen }: ListProps<NodeSummary>) {
   });
 
   const columns: Column<NodeSummary>[] = [
-    { key: "name", header: "Name", render: (n) => n.name },
+    { key: "name", header: "Name", render: (n) => n.name, sortValue: (n) => n.name },
     {
       key: "status",
       header: "Status",
@@ -44,6 +49,8 @@ export function Nodes({ onOpen }: ListProps<NodeSummary>) {
           label={n.ready ? "Ready" : "NotReady"}
         />
       ),
+      // NotReady first, because that is the node you are looking for.
+      sortValue: (n) => (n.ready ? 1 : 0),
     },
     {
       key: "roles",
@@ -51,9 +58,22 @@ export function Nodes({ onOpen }: ListProps<NodeSummary>) {
       // Chips rather than a comma-joined string: a node with three
       // roles should read as three things, not one long value.
       render: (n) => <ChipList values={n.roles} tone="accent" />,
+      sortValue: (n) => n.roles.join(" "),
     },
-    { key: "version", header: "Version", render: (n) => n.version, mono: true },
-    { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
+    {
+      key: "version",
+      header: "Version",
+      render: (n) => n.version,
+      mono: true,
+      sortValue: (n) => n.version,
+    },
+    {
+      key: "age",
+      header: "Age",
+      render: (n) => n.age ?? "—",
+      mono: true,
+      sortValue: (n) => n.age,
+    },
   ];
 
   return (
@@ -84,15 +104,24 @@ export function Namespaces({ onOpen }: ListProps<NamespaceSummary>) {
   });
 
   const columns: Column<NamespaceSummary>[] = [
-    { key: "name", header: "Name", render: (n) => n.name },
+    { key: "name", header: "Name", render: (n) => n.name, sortValue: (n) => n.name },
     {
       key: "phase",
       header: "Status",
       render: (n) => (
         <StatusDot tone={n.phase === "Active" ? "ok" : "warn"} label={n.phase} />
       ),
+      // Terminating before Active: a namespace that will not go away is
+      // the one worth finding.
+      sortValue: (n) => (n.phase === "Active" ? 1 : 0),
     },
-    { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
+    {
+      key: "age",
+      header: "Age",
+      render: (n) => n.age ?? "—",
+      mono: true,
+      sortValue: (n) => n.age,
+    },
   ];
 
   return (
@@ -134,14 +163,31 @@ export function Pods({ onOpen }: ListProps<PodSummary>) {
   });
 
   const columns: Column<PodSummary>[] = [
-    { key: "name", header: "Name", render: (p) => p.name },
-    { key: "namespace", header: "Namespace", render: (p) => p.namespace },
+    { key: "name", header: "Name", render: (p) => p.name, sortValue: (p) => p.name },
+    {
+      key: "namespace",
+      header: "Namespace",
+      render: (p) => p.namespace,
+      sortValue: (p) => p.namespace,
+    },
     {
       key: "phase",
       header: "Status",
       render: (p) => <StatusDot tone={phaseTone(p.phase)} label={p.phase} />,
+      // By how much the phase should worry you rather than by its name,
+      // so Failed and Pending come up together ahead of Running instead
+      // of landing either side of it alphabetically.
+      sortValue: (p) => PHASE_ORDER.indexOf(phaseTone(p.phase)),
     },
-    { key: "ready", header: "Ready", render: (p) => p.ready, mono: true },
+    {
+      key: "ready",
+      header: "Ready",
+      render: (p) => p.ready,
+      mono: true,
+      // "0/1" before "2/3" before "1/1" — least ready first, which is
+      // what the column is scanned for.
+      sortValue: (p) => p.ready,
+    },
     {
       key: "restarts",
       header: "Restarts",
@@ -152,9 +198,21 @@ export function Pods({ onOpen }: ListProps<PodSummary>) {
         ) : (
           <span className="text-content-muted">0</span>
         ),
+      sortValue: (p) => p.restarts,
     },
-    { key: "node", header: "Node", render: (p) => p.node ?? "—" },
-    { key: "age", header: "Age", render: (p) => p.age ?? "—", mono: true },
+    {
+      key: "node",
+      header: "Node",
+      render: (p) => p.node ?? "—",
+      sortValue: (p) => p.node,
+    },
+    {
+      key: "age",
+      header: "Age",
+      render: (p) => p.age ?? "—",
+      mono: true,
+      sortValue: (p) => p.age,
+    },
   ];
 
   return (

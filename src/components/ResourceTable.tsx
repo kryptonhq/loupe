@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Table, type Column } from "./Table";
 import { SkeletonRows } from "./Skeleton";
 import type { OpenIntent } from "../lib/routes";
+import { nextSort, sortRows, type SortState } from "../lib/sort";
 
 const PAGE_SIZE = 50;
 
@@ -44,6 +45,9 @@ export function ResourceTable<T>({
 }: ResourceTableProps<T>) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
+  // Null is the order the server sent, which for a Kubernetes listing is
+  // meaningful in its own right — it is what `kubectl get` prints.
+  const [sort, setSort] = useState<SortState | null>(null);
 
   const filtered = useMemo(() => {
     if (!rows) return [];
@@ -58,7 +62,22 @@ export function ResourceTable<T>({
     });
   }, [rows, query, searchText]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // After filtering and before paging, so page 1 holds the first rows of
+  // the sorted set rather than the sorted first page.
+  const ordered = useMemo(() => {
+    if (!sort) return filtered;
+    const column = columns.find((c) => c.key === sort.key);
+    if (!column?.sortValue) return filtered;
+    return sortRows(filtered, column.sortValue, sort.direction);
+  }, [filtered, sort, columns]);
+
+  function chooseSort(key: string) {
+    setSort((current) => nextSort(current, key));
+    // The row that was on page 3 is somewhere else entirely now.
+    setPage(0);
+  }
+
+  const pageCount = Math.max(1, Math.ceil(ordered.length / PAGE_SIZE));
 
   // Filtering can strip away the page the user was on; clamp rather than
   // showing an empty table below a non-empty result count.
@@ -67,7 +86,20 @@ export function ResourceTable<T>({
   }, [page, pageCount]);
 
   const start = page * PAGE_SIZE;
-  const visible = filtered.slice(start, start + PAGE_SIZE);
+  const visible = ordered.slice(start, start + PAGE_SIZE);
+
+  // A sort over a partly loaded listing has not sorted the cluster, in
+  // exactly the way a search over one has not searched it — and a sort
+  // hides that better, because the rows come back convincingly ordered
+  // with the real top of the list still on the server.
+  const partial =
+    query && sort
+      ? "search and sort cover"
+      : query
+        ? "search covers"
+        : sort
+          ? "the sort covers"
+          : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -94,7 +126,7 @@ export function ResourceTable<T>({
             className="shrink-0 text-2xs tabular-nums text-content-muted"
             title={
               hasMore
-                ? "More objects exist in the cluster than have been loaded, so search covers what is here"
+                ? "More objects exist in the cluster than have been loaded, so searching and sorting cover only what is here"
                 : undefined
             }
           >
@@ -122,6 +154,8 @@ export function ResourceTable<T>({
               rows={visible}
               rowKey={rowKey}
               onRowClick={onRowClick}
+              sort={sort}
+              onSort={chooseSort}
               empty={
                 query
                   ? `Nothing matches “${query}”.`
@@ -137,7 +171,7 @@ export function ResourceTable<T>({
           <span className="min-w-0 truncate text-content-secondary">
             Showing the first {rows?.length ?? 0}
             {remaining !== null && ` of ${(rows?.length ?? 0) + remaining}`}
-            {query && " — search covers only what is loaded"}
+            {partial && ` — ${partial} only what is loaded`}
           </span>
           <button
             onClick={onLoadMore}
@@ -152,8 +186,8 @@ export function ResourceTable<T>({
       {pageCount > 1 && (
         <div className="flex items-center justify-between border-t px-4 py-1.5 text-2xs">
           <span className="tabular-nums text-content-muted">
-            {start + 1}–{Math.min(start + PAGE_SIZE, filtered.length)} of{" "}
-            {filtered.length}
+            {start + 1}–{Math.min(start + PAGE_SIZE, ordered.length)} of{" "}
+            {ordered.length}
           </span>
           <span className="flex items-center gap-1">
             <PageButton

@@ -100,7 +100,7 @@ export function TableBrowser({
       .map((column, index) => ({ column, index }))
       .filter(({ column }) => wide || column.priority === 0);
 
-    const cells = visible.map(({ column, index }) => {
+    const cells: Column<TableRow>[] = visible.map(({ column, index }) => {
       const status = STATUS_COLUMNS.has(column.name.toLowerCase());
       return {
         key: `${index}`,
@@ -119,6 +119,12 @@ export function TableBrowser({
           );
         },
         mono: !status && /age|ports?|ip|capacity|size|version/i.test(column.name),
+        // The raw cell, not the rendered one. Every value here is a
+        // string the server printed, so the comparator does the reading:
+        // an AGE of "65d" against "10m", a READY of "0/1" against "1/1",
+        // a RESTARTS of "12" against "2" all order by what they mean
+        // rather than by how they happen to spell it.
+        sortValue: (row: TableRow) => row.cells[index],
       } satisfies Column<TableRow>;
     });
 
@@ -130,6 +136,7 @@ export function TableBrowser({
         header: "Namespace",
         render: (row: TableRow) => row.namespace ?? "—",
         mono: false,
+        sortValue: (row: TableRow) => row.namespace,
       });
     }
     return cells;
