@@ -19,7 +19,6 @@ function setup(tab = "overview") {
       tab={tab}
       onTab={onTab}
       onClose={onClose}
-      backTo="pods"
     >
       <textarea aria-label="Object YAML" defaultValue="kind: Pod" />
     </DetailShell>,
@@ -54,9 +53,13 @@ describe("DetailShell", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("names what the back button returns to", () => {
+  it("leaves navigation to the trail bar above it", () => {
+    // Back, forward and the trail belong to the workspace, which knows
+    // the whole path; a second back button here would only know the one
+    // step this page was given.
     setup();
-    expect(screen.getByRole("button", { name: "Back to pods" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Back/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
   });
 
   it("shows an error without hiding the content underneath", () => {

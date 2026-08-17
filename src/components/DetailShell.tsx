@@ -5,10 +5,15 @@ import { dragRegionProps } from "../lib/window";
 // The frame every detail page sits in.
 //
 // Same shape as Panel — glass header, error strip, scrolling body — plus
-// a back affordance and a tab bar, because a detail view is always
-// several views of one object. Extracted so pods, nodes, namespaces,
-// custom resources and Helm releases cannot drift apart in how they
-// present themselves.
+// a tab bar, because a detail view is always several views of one
+// object. Extracted so pods, nodes, namespaces, custom resources and
+// Helm releases cannot drift apart in how they present themselves.
+//
+// Going back is not this component's job any more: the trail bar above
+// owns it, for every route rather than only for detail views. What is
+// left here is Escape, which stays because a reader's hand is already
+// on the keyboard and it is the one binding people try without being
+// told.
 
 export interface TabSpec {
   id: string;
@@ -23,9 +28,9 @@ interface DetailShellProps {
   tabs: TabSpec[];
   tab: string;
   onTab: (id: string) => void;
+  /// Escape. Wired to the trail bar's back, so the key and the arrow
+  /// do the same thing.
   onClose: () => void;
-  /// What the back button returns to, for its tooltip.
-  backTo?: string;
   error?: unknown;
   actions?: ReactNode;
   children: ReactNode;
@@ -39,7 +44,6 @@ export function DetailShell({
   tab,
   onTab,
   onClose,
-  backTo,
   error,
   actions,
   children,
@@ -58,37 +62,19 @@ export function DetailShell({
 
   return (
     <section className="flex h-full flex-col">
-      <header {...dragRegionProps} className="drag-region glass border-b px-4 pb-3 pt-10">
+      <header {...dragRegionProps} className="drag-region glass border-b px-4 pb-3 pt-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <button
-                onClick={onClose}
-                className="no-drag rounded-sm px-1.5 text-content-muted transition-colors hover:bg-content/[0.06] hover:text-content"
-                title={backTo ? `Back to ${backTo}` : "Back"}
-                aria-label={backTo ? `Back to ${backTo}` : "Back"}
-              >
-                ←
-              </button>
               <h2 className="truncate font-semibold">{title}</h2>
               {badge}
             </div>
             {subtitle && (
-              <p className="truncate pl-8 text-2xs text-content-muted">
-                {subtitle}
-              </p>
+              <p className="truncate text-2xs text-content-muted">{subtitle}</p>
             )}
           </div>
 
-          <div className="no-drag flex shrink-0 items-center gap-2">
-            {actions}
-            <button
-              onClick={onClose}
-              className="shrink-0 rounded-sm border px-2 py-1 text-2xs text-content-secondary transition-colors duration-150 ease-swift hover:bg-content/[0.06] hover:text-content"
-            >
-              Close
-            </button>
-          </div>
+          <div className="no-drag flex shrink-0 items-center gap-2">{actions}</div>
         </div>
 
         <nav className="no-drag mt-3 flex gap-1">

@@ -12,13 +12,22 @@ import {
   type NodeSummary,
   type PodSummary,
 } from "../lib/api";
-import { PodDetail } from "./PodDetail";
-import { NodeDetail } from "./NodeDetail";
-import { NamespaceDetail } from "./NamespaceDetail";
+import type { OpenIntent } from "../lib/routes";
 
-export function Nodes() {
-  const [selected, setSelected] = useState<string | null>(null);
+// The three listings that have a view of their own rather than a
+// server-printed table.
+//
+// Each one is now a listing and nothing else: what happens when a row is
+// opened is the workspace's business, so the same row can go to this tab
+// or to a new one, and the trail behind it survives. Previously each of
+// these held a `selected` and swapped itself for a detail view, which is
+// why there was nothing to go back to.
 
+interface ListProps<T> {
+  onOpen: (target: T, intent: OpenIntent) => void;
+}
+
+export function Nodes({ onOpen }: ListProps<NodeSummary>) {
   const q = useQuery({
     queryKey: ["nodes"],
     queryFn: () => api.listNodes(),
@@ -47,10 +56,6 @@ export function Nodes() {
     { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
   ];
 
-  if (selected) {
-    return <NodeDetail name={selected} onClose={() => setSelected(null)} />;
-  }
-
   return (
     <Panel
       title="Nodes"
@@ -66,15 +71,13 @@ export function Nodes() {
         rowKey={(n) => n.name}
         searchText={(n) => `${n.name} ${n.roles.join(" ")} ${n.version}`}
         empty="No nodes visible."
-        onRowClick={(n) => setSelected(n.name)}
+        onRowClick={onOpen}
       />
     </Panel>
   );
 }
 
-export function Namespaces() {
-  const [selected, setSelected] = useState<string | null>(null);
-
+export function Namespaces({ onOpen }: ListProps<NamespaceSummary>) {
   const q = useQuery({
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
@@ -92,12 +95,6 @@ export function Namespaces() {
     { key: "age", header: "Age", render: (n) => n.age ?? "—", mono: true },
   ];
 
-  if (selected) {
-    return (
-      <NamespaceDetail name={selected} onClose={() => setSelected(null)} />
-    );
-  }
-
   return (
     <Panel
       title="Namespaces"
@@ -113,19 +110,15 @@ export function Namespaces() {
         rowKey={(n) => n.name}
         searchText={(n) => `${n.name} ${n.phase}`}
         empty="No namespaces visible."
-        onRowClick={(n) => setSelected(n.name)}
+        onRowClick={onOpen}
       />
     </Panel>
   );
 }
 
-export function Pods() {
+export function Pods({ onOpen }: ListProps<PodSummary>) {
   // Empty string means all namespaces, matching kubectl -A.
   const [namespace, setNamespace] = useState("");
-  const [selected, setSelected] = useState<{
-    namespace: string;
-    name: string;
-  } | null>(null);
 
   const pods = useQuery({
     queryKey: ["pods", namespace],
@@ -164,16 +157,6 @@ export function Pods() {
     { key: "age", header: "Age", render: (p) => p.age ?? "—", mono: true },
   ];
 
-  if (selected) {
-    return (
-      <PodDetail
-        namespace={selected.namespace}
-        name={selected.name}
-        onClose={() => setSelected(null)}
-      />
-    );
-  }
-
   return (
     <Panel
       title="Pods"
@@ -189,7 +172,7 @@ export function Pods() {
         rowKey={(p) => `${p.namespace}/${p.name}`}
         searchText={(p) => `${p.name} ${p.namespace} ${p.phase} ${p.node ?? ""}`}
         empty="No pods visible."
-        onRowClick={(p) => setSelected({ namespace: p.namespace, name: p.name })}
+        onRowClick={onOpen}
         toolbar={
           <Select value={namespace} onChange={setNamespace}>
             <option value="">All namespaces</option>

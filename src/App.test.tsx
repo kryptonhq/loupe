@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
@@ -14,8 +14,20 @@ vi.mock("./lib/api", async (original) => {
   const actual = await original<typeof import("./lib/api")>();
   return {
     ...actual,
+    // Listings hold a watch, and Tauri's own Channel reaches into webview
+    // internals that do not exist here.
+    Channel: class {
+      onmessage?: (event: unknown) => void;
+    },
     api: {
       ...actual.api,
+      startWatch: vi.fn().mockResolvedValue(1),
+      stopWatch: vi.fn().mockResolvedValue(true),
+      getPod: vi.fn(),
+      getObject: vi.fn(),
+      listRelated: vi.fn(),
+      listTable: vi.fn(),
+      listEvents: vi.fn(),
       currentCluster: vi.fn(),
       getSettings: vi.fn(),
       setTheme: vi.fn(),
@@ -100,7 +112,45 @@ beforeEach(() => {
   vi.mocked(api.listApiResources).mockResolvedValue([]);
   vi.mocked(api.listHelmReleases).mockResolvedValue([]);
   vi.mocked(api.vibrancyEnabled).mockResolvedValue(false);
+  vi.mocked(api.listEvents).mockResolvedValue([]);
+  vi.mocked(api.listRelated).mockResolvedValue([]);
+  vi.mocked(api.listPods).mockResolvedValue([
+    {
+      name: "web-abc",
+      namespace: "prod",
+      phase: "Running",
+      node: "worker-1",
+      ready: "1/1",
+      restarts: 0,
+      age: "3d",
+    },
+  ]);
+  vi.mocked(api.getPod).mockResolvedValue({
+    apiVersion: "v1",
+    kind: "Pod",
+    name: "web-abc",
+    namespace: "prod",
+    phase: "Running",
+    node: "worker-1",
+    podIp: "10.1.2.3",
+    serviceAccount: "default",
+    qosClass: "Burstable",
+    age: "3d",
+    labels: [],
+    annotations: [],
+    containers: [],
+    initContainers: [],
+    conditions: [],
+    yaml: "apiVersion: v1\nkind: Pod\n",
+  });
 });
+
+/// Open the pod list, then the one pod in it.
+async function openPod(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /Pods/ }));
+  await user.click(await screen.findByText("web-abc"));
+  return screen.findByRole("heading", { name: "web-abc" });
+}
 
 describe("App startup", () => {
   it("reconnects to the session already held in Rust", async () => {
@@ -146,6 +196,221 @@ describe("App navigation", () => {
     await waitFor(() =>
       expect(api.listHelmReleases).toHaveBeenCalled(),
     );
+  });
+});
+
+// Tabs and history. The mechanics are covered in lib/workspace.test.ts;
+// what these assert is that the shell is wired to them — that opening an
+// object keeps the listing it came from, that back retraces the trip,
+// and that a tab is a piece of work you can leave and return to.
+describe("App workspace", () => {
+  it("keeps the listing behind an object it opened", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await openPod(user);
+
+    // The trail says where this came from, which is the whole difference
+    // between a tab and a page that replaced another.
+    const trail = screen.getByRole("navigation", { name: "Trail" });
+    expect(within(trail).getByTitle(/Back to Pods/)).toBeInTheDocument();
+  });
+
+  it("goes back to the listing and forward to the object again", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Forward" }));
+    expect(
+      await screen.findByRole("heading", { name: "web-abc" }),
+    ).toBeInTheDocument();
+  });
+
+  it("goes back on Escape as well as on the arrow", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
+  });
+
+  it("walks back several steps from a crumb", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+
+    const trail = screen.getByRole("navigation", { name: "Trail" });
+    await user.click(within(trail).getByTitle(/Back to Nodes/));
+
+    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+  });
+
+  it("hides the trail at the top of a tab, where there is no path", async () => {
+    renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    expect(
+      screen.queryByRole("navigation", { name: "Trail" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens a row in its own tab when the modifier is held", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByRole("button", { name: /Pods/ }));
+    const row = await screen.findByText("web-abc");
+    await user.keyboard("{Meta>}");
+    await user.click(row);
+    await user.keyboard("{/Meta}");
+
+    await screen.findByRole("heading", { name: "web-abc" });
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("leaves the other tab where it was", async () => {
+    // The point of a second tab: the first keeps its place, so going
+    // back to it costs nothing.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+
+    await user.keyboard("{Meta>}t{/Meta}");
+    const [first, second] = screen.getAllByRole("tab");
+    expect(second).toHaveAttribute("aria-selected", "true");
+
+    await user.click(first);
+    expect(
+      await screen.findByRole("heading", { name: "web-abc" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes a tab and shows its neighbour", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}t{/Meta}");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+
+    await user.keyboard("{Meta>}w{/Meta}");
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+  });
+
+  it("never leaves the window with no tab at all", async () => {
+    // A window with nothing open has nowhere to render and nothing to
+    // click, so the last tab resets rather than closing.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+
+    await user.keyboard("{Meta>}w{/Meta}");
+
+    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+
+  it("reaches a tab by number", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+    await user.keyboard("{Meta>}t{/Meta}");
+
+    await user.keyboard("{Meta>}1{/Meta}");
+    expect(
+      await screen.findByRole("heading", { name: "web-abc" }),
+    ).toBeInTheDocument();
+  });
+
+  it("names each tab after what it is showing", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    expect(screen.getByRole("tab")).toHaveTextContent("Nodes");
+
+    await openPod(user);
+    expect(screen.getByRole("tab")).toHaveTextContent("web-abc");
+  });
+
+  it("follows a related object into another kind, and retraces the chain", async () => {
+    // The trip the Related tab exists for: from a Deployment to the
+    // ConfigMap it mounts. Going back has to land on the Deployment
+    // rather than on the listing, or every step of the chain is lost at
+    // once.
+    vi.mocked(api.listTable).mockResolvedValue({
+      namespaced: true,
+      columns: [{ name: "Name", priority: 0, description: null }],
+      rows: [{ name: "web", namespace: "prod", cells: ["web"] }],
+      continueToken: null,
+      remaining: null,
+    });
+    vi.mocked(api.getObject).mockImplementation(
+      async (resource, namespace, name) =>
+        ({
+          apiVersion: `${resource.group}/${resource.version}`,
+          kind: resource.kind,
+          name,
+          namespace,
+          age: "6d",
+          status: "Ready",
+          labels: [],
+          annotations: [],
+          conditions: [],
+          editable: true,
+          yaml: `kind: ${resource.kind}\n`,
+        }) as never,
+    );
+    vi.mocked(api.listRelated).mockResolvedValue([
+      {
+        relation: "uses",
+        group: "",
+        version: "v1",
+        kind: "ConfigMap",
+        name: "web-config",
+        namespace: "prod",
+        reachable: true,
+        detail: "volume config",
+      },
+    ]);
+
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByRole("button", { name: "Deployments" }));
+    await user.click(await screen.findByText("web"));
+    await screen.findByRole("heading", { name: "web" });
+
+    await user.click(await screen.findByRole("button", { name: "Related" }));
+    await user.click(await screen.findByRole("button", { name: /web-config/ }));
+    await screen.findByRole("heading", { name: "web-config" });
+
+    // Back to the Deployment, not to the Deployments listing.
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("heading", { name: "web" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(
+      await screen.findByRole("heading", { name: "Deployments" }),
+    ).toBeInTheDocument();
+  });
+
+  it("starts a fresh workspace when the cluster changes", async () => {
+    // Tabs name objects in the cluster being left. One pointing at a pod
+    // that does not exist here is worse than starting clean.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+    await user.keyboard("{Meta>}t{/Meta}");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+
+    await user.click(screen.getByTitle(/Click to switch cluster/));
+    await user.click(await screen.findByText("orbstack"));
+
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getByRole("heading", { name: "Nodes" })).toBeInTheDocument();
   });
 });
 

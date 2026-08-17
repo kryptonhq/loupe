@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Table, type Column } from "./Table";
 import { SkeletonRows } from "./Skeleton";
+import type { OpenIntent } from "../lib/routes";
 
 const PAGE_SIZE = 50;
 
@@ -13,7 +14,7 @@ export interface ResourceTableProps<T> {
   searchText: (row: T) => string;
   isLoading: boolean;
   empty?: string;
-  onRowClick?: (row: T) => void;
+  onRowClick?: (row: T, intent: OpenIntent) => void;
   /// Extra controls rendered to the left of the search box.
   toolbar?: ReactNode;
   /// True when the cluster holds more objects than have been fetched.

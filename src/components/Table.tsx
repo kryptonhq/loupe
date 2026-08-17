@@ -5,6 +5,7 @@
 // hundreds of rows and losing the column names on scroll is the single
 // most annoying thing a resource table can do.
 import type { ReactNode } from "react";
+import { intentOf, type OpenIntent } from "../lib/routes";
 
 export interface Column<T> {
   key: string;
@@ -24,7 +25,8 @@ interface TableProps<T> {
   /// repeated Kubernetes events can be identical in every field.
   rowKey: (row: T, index: number) => string;
   empty?: string;
-  onRowClick?: (row: T) => void;
+  /// The intent says whether the click asked for this tab or a new one.
+  onRowClick?: (row: T, intent: OpenIntent) => void;
 }
 
 export function Table<T>({
@@ -61,7 +63,7 @@ export function Table<T>({
         {rows.map((row, index) => (
           <tr
             key={rowKey(row, index)}
-            onClick={onRowClick ? () => onRowClick(row) : undefined}
+            onClick={onRowClick ? (e) => onRowClick(row, intentOf(e)) : undefined}
             // Rows are only focusable when they do something; a tab stop
             // that goes nowhere is worse than none.
             tabIndex={onRowClick ? 0 : undefined}
@@ -70,7 +72,7 @@ export function Table<T>({
                 ? (e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      onRowClick(row);
+                      onRowClick(row, intentOf(e));
                     }
                   }
                 : undefined

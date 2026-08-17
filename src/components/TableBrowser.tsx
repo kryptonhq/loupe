@@ -6,6 +6,7 @@ import { type Column } from "./Table";
 import { Select } from "./Select";
 import { StatusDot } from "./StatusDot";
 import { api, type GvkRef, type TableRow } from "../lib/api";
+import type { OpenIntent } from "../lib/routes";
 import { useWatch } from "../lib/useWatch";
 import { statusTone } from "../pages/ObjectDetail";
 
@@ -41,7 +42,7 @@ interface TableBrowserProps {
   title: string;
   /// Rendered under the title — the API group, usually.
   subtitle?: string;
-  onOpen: (row: TableRow) => void;
+  onOpen: (row: TableRow, intent: OpenIntent) => void;
   /// Extra controls for the panel header.
   actions?: React.ReactNode;
 }

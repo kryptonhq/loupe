@@ -125,7 +125,6 @@ export function NamespaceDetail({
       tab={tab}
       onTab={setTab}
       onClose={onClose}
-      backTo="namespaces"
       error={q.error}
     >
       {tab === "overview" &&

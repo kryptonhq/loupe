@@ -95,7 +95,6 @@ export function PodDetail({ namespace, name, onClose }: PodDetailProps) {
       tab={tab}
       onTab={setTab}
       onClose={onClose}
-      backTo="pods"
       error={q.error}
       actions={
         pod && (

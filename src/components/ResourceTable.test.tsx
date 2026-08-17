@@ -233,7 +233,31 @@ describe("Table rows", () => {
     );
 
     await user.click(screen.getByText("pod-000"));
-    expect(onRowClick).toHaveBeenCalledWith({ name: "pod-000", phase: "Running" });
+    expect(onRowClick).toHaveBeenCalledWith(
+      { name: "pod-000", phase: "Running" },
+      "here",
+    );
+  });
+
+  it("asks for a new tab when a row is clicked with the modifier held", async () => {
+    // The row reports how it was opened and lets the caller decide what
+    // that means, the same way a link does.
+    const onRowClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Table
+        columns={COLUMNS}
+        rows={rows(1)}
+        rowKey={(r) => r.name}
+        onRowClick={onRowClick}
+      />,
+    );
+
+    await user.keyboard("{Meta>}");
+    await user.click(screen.getByText("pod-000"));
+    await user.keyboard("{/Meta}");
+
+    expect(onRowClick).toHaveBeenCalledWith(expect.anything(), "newTab");
   });
 
   it("opens a row from the keyboard", async () => {

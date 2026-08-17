@@ -16,6 +16,7 @@ import {
   type ReleaseRevision,
   type ReleaseSummary,
 } from "../lib/api";
+import type { OpenIntent } from "../lib/routes";
 
 // Helm releases, read out of the release Secrets rather than the CLI.
 //
@@ -51,7 +52,7 @@ const TABS: TabSpec[] = [
   { id: "history", label: "History" },
 ];
 
-function ReleaseDetail({
+export function ReleaseDetail({
   namespace,
   name,
   onClose,
@@ -104,7 +105,6 @@ function ReleaseDetail({
       tab={tab}
       onTab={setTab}
       onClose={onClose}
-      backTo="releases"
       error={q.error}
     >
       {!release && <OverviewSkeleton />}
@@ -180,9 +180,12 @@ function ReleaseDetail({
   );
 }
 
-export function Helm() {
+export function Helm({
+  onOpen,
+}: {
+  onOpen: (release: ReleaseSummary, intent: OpenIntent) => void;
+}) {
   const [namespace, setNamespace] = useState("");
-  const [selected, setSelected] = useState<ReleaseSummary | null>(null);
 
   const q = useQuery({
     queryKey: ["helm-releases", namespace],
@@ -219,16 +222,6 @@ export function Helm() {
     },
   ];
 
-  if (selected) {
-    return (
-      <ReleaseDetail
-        namespace={selected.namespace}
-        name={selected.name}
-        onClose={() => setSelected(null)}
-      />
-    );
-  }
-
   return (
     <Panel
       title="Helm releases"
@@ -244,7 +237,7 @@ export function Helm() {
         rowKey={(r) => `${r.namespace}/${r.name}`}
         searchText={(r) => `${r.name} ${r.namespace} ${r.chart} ${r.status}`}
         empty="No Helm releases. Loupe reads the default secret driver; a cluster configured for the configmap or SQL backend keeps them elsewhere."
-        onRowClick={setSelected}
+        onRowClick={onOpen}
         toolbar={
           <Select value={namespace} onChange={setNamespace}>
             <option value="">All namespaces</option>

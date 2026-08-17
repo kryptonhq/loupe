@@ -9,7 +9,12 @@ const SHORTCUTS: { keys: string; what: string }[] = [
   { keys: "⌘K / Ctrl-K", what: "Open the command palette" },
   { keys: "↑ ↓", what: "Move through the palette" },
   { keys: "↵", what: "Run the selected command" },
-  { keys: "Esc", what: "Close the palette, or go back from a detail view" },
+  { keys: "⌘T", what: "New tab, on whatever is open" },
+  { keys: "⌘W", what: "Close the tab" },
+  { keys: "⌘1 … ⌘9", what: "Go to a tab by position" },
+  { keys: "⌘[ / ⌘]", what: "Back and forward through the trail" },
+  { keys: "⌘-click", what: "Open a row in a tab of its own" },
+  { keys: "Esc", what: "Close the palette, or go back" },
   { keys: "?", what: "Show this list" },
 ];
 

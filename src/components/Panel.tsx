@@ -30,7 +30,7 @@ export function Panel({
     <section className="flex h-full flex-col">
       <header
         {...dragRegionProps}
-        className="drag-region glass flex items-center justify-between gap-3 border-b px-4 pb-3 pt-10"
+        className="drag-region glass flex items-center justify-between gap-3 border-b px-4 pb-3 pt-3"
       >
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold tracking-tight">

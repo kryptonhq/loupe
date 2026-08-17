@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Helm } from "./Helm";
+import { Helm, ReleaseDetail as ReleaseDetailView } from "./Helm";
 import {
   api,
   type ReleaseDetail,
@@ -85,25 +85,34 @@ function detail(overrides: Partial<ReleaseDetail> = {}): ReleaseDetail {
   };
 }
 
+const onOpen = vi.fn();
+
+function client() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
 function renderHelm() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   render(
-    <QueryClientProvider client={client}>
-      <Helm />
+    <QueryClientProvider client={client()}>
+      <Helm onOpen={onOpen} />
     </QueryClientProvider>,
   );
   return userEvent.setup();
 }
 
-/// Opens the release detail from the list.
-async function openRelease(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByText("prom"));
-  await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
+/// The detail view, rendered as the workspace renders it: on its own,
+/// for one release, rather than nested inside the listing.
+function renderRelease() {
+  render(
+    <QueryClientProvider client={client()}>
+      <ReleaseDetailView namespace="monitoring" name="prom" onClose={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  return userEvent.setup();
 }
 
 beforeEach(() => {
+  onOpen.mockReset();
   listHelmReleases.mockReset().mockResolvedValue([summary()]);
   getHelmRelease.mockReset().mockResolvedValue(detail());
   listNamespaces
@@ -138,6 +147,17 @@ describe("Helm release list", () => {
     );
   });
 
+  it("reports the release it was told to open", async () => {
+    const user = renderHelm();
+    await user.click(await screen.findByText("prom"));
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "prom", namespace: "monitoring" }),
+        "here",
+      ),
+    );
+  });
+
   it("surfaces a failure to list", async () => {
     listHelmReleases.mockRejectedValue({
       kind: "kubernetes",
@@ -149,15 +169,15 @@ describe("Helm release list", () => {
 });
 
 describe("Helm release detail", () => {
-  it("opens the release that was clicked", async () => {
-    const user = renderHelm();
-    await openRelease(user);
+  it("reads the release it was pointed at", async () => {
+    renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     expect(getHelmRelease).toHaveBeenCalledWith("monitoring", "prom");
   });
 
   it("leads with the live revision", async () => {
-    const user = renderHelm();
-    await openRelease(user);
+    renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     expect(await screen.findByText("rev 3")).toBeInTheDocument();
     expect(screen.getByText("kube-prometheus-stack")).toBeInTheDocument();
     expect(screen.getByText("85.3.3")).toBeInTheDocument();
@@ -166,8 +186,8 @@ describe("Helm release detail", () => {
   it("shows what was overridden, not the chart's defaults", async () => {
     // `helm get values` makes the same distinction, and it is the one
     // that answers "what did we actually configure".
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "Values" }));
 
     expect(await screen.findByText(/grafana/)).toBeInTheDocument();
@@ -176,8 +196,8 @@ describe("Helm release detail", () => {
   it("says so when a release runs the chart's defaults", async () => {
     // An empty YAML pane would read as a failure to load.
     getHelmRelease.mockResolvedValue(detail({ values: "" }));
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "Values" }));
 
     expect(
@@ -188,8 +208,8 @@ describe("Helm release detail", () => {
   it("renders the notes as written", async () => {
     // Usually the only place a chart says how to reach what it just
     // installed, and the line breaks in it are meaningful.
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "Notes" }));
 
     expect(await screen.findByText(/localhost:3000/)).toBeInTheDocument();
@@ -197,8 +217,8 @@ describe("Helm release detail", () => {
 
   it("says so when a chart ships no notes", async () => {
     getHelmRelease.mockResolvedValue(detail({ notes: null }));
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "Notes" }));
 
     expect(await screen.findByText(/ships no notes/)).toBeInTheDocument();
@@ -206,8 +226,8 @@ describe("Helm release detail", () => {
 
   it("reads its history backwards in time", async () => {
     // The way `helm history` prints it: the current revision at the top.
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "History" }));
 
     expect(await screen.findByText("superseded")).toBeInTheDocument();
@@ -220,8 +240,8 @@ describe("Helm release detail", () => {
   });
 
   it("renders the manifest that was applied", async () => {
-    const user = renderHelm();
-    await openRelease(user);
+    const user = renderRelease();
+    await waitFor(() => expect(getHelmRelease).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "Manifest" }));
 
     expect(await screen.findByText(/Service/)).toBeInTheDocument();

@@ -5,28 +5,27 @@ import { dragRegionProps } from "../lib/window";
 import { KIND_SECTIONS, type KindEntry } from "../lib/kinds";
 import { ThemePicker } from "./ThemePicker";
 import type { Theme } from "../lib/theme";
-import { Select } from "./Select";
 import { ForwardsPanel } from "./Forwards";
-import { api, type ApiResourceInfo, type ClusterInfo, type Guard } from "../lib/api";
+import { api, type ApiResourceInfo } from "../lib/api";
+import type { Route } from "../lib/routes";
 
-/// Which pane the main area is showing.
-///
-/// `kind` covers everything driven by a server-printed table — the
-/// sidebar's workloads, networking, config and storage entries, and any
-/// custom resource picked from the CRDs section. The rest have views
-/// with more than a table behind them.
-export type View =
-  | { type: "nodes" }
-  | { type: "namespaces" }
-  | { type: "pods" }
-  | { type: "crds" }
-  | { type: "helm" }
-  | { type: "kind"; entry: KindEntry };
+// The rail: where you go, not what you are connected to.
+//
+// The cluster chip, its guard and the disconnect button used to live in
+// the foot of this list. They describe the session rather than a
+// destination, and a reader three panes deep into a manifest has no
+// reason to look back at the navigation to find out which cluster they
+// are about to write to — so they are in the status bar now.
 
 // Each resource gets a mark rather than an icon font. The references
 // that read well all use colour to make the left rail scannable — you
 // learn the shape and stop reading the label.
-type Item = { id: View["type"]; label: string; tint: string; glyph: string };
+type Item = {
+  id: "nodes" | "namespaces" | "pods" | "helm";
+  label: string;
+  tint: string;
+  glyph: string;
+};
 
 const CLUSTER_ITEMS: Item[] = [
   { id: "nodes", label: "Nodes", tint: "text-info", glyph: "▤" },
@@ -39,45 +38,16 @@ const HELM: Item = { id: "helm", label: "Helm", tint: "text-info", glyph: "⎈" 
 const CRD_MARK = { tint: "text-warn", glyph: "❖" };
 
 interface SidebarProps {
-  cluster: ClusterInfo | null;
-  view: View;
-  onSelect: (v: View) => void;
+  /// What the active tab is showing, so the rail can mark it.
+  route: Route;
+  onSelect: (route: Route) => void;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  /// What the connected context allows, and how to change it. Shown
-  /// beside the cluster name rather than buried in a settings screen:
-  /// the whole value of the safeguard is that it is legible at a glance,
-  /// and in a screenshot.
-  guard: Guard;
-  onGuardChange: (guard: Guard) => void;
-  onSwitchCluster: () => void;
-  onDisconnect: () => void;
 }
 
-/// How each guard reads in the rail.
-const GUARD_LABEL: Record<Guard, string> = {
-  open: "Writable",
-  protected: "Protected",
-  readOnly: "Read-only",
-};
-
-const GUARD_TONE: Record<Guard, string> = {
-  open: "text-content-muted",
-  protected: "text-warn",
-  readOnly: "text-danger",
-};
-
-/// The dot beside the cluster name. Green for an ordinary cluster, and
-/// something you cannot miss for one you have marked.
-const GUARD_DOT: Record<Guard, string> = {
-  open: "bg-success shadow-[0_0_0_3px_rgb(var(--success)/0.15)]",
-  protected: "bg-warn shadow-[0_0_0_3px_rgb(var(--warn)/0.15)]",
-  readOnly: "bg-danger shadow-[0_0_0_3px_rgb(var(--danger)/0.15)]",
-};
-
-/// The kind a `kind` view is showing, or null for anything else.
-function selectedKindId(view: View) {
-  return view.type === "kind" ? view.entry.id : null;
+/// The kind a `kind` route is showing, or null for anything else.
+function selectedKindId(route: Route) {
+  return route.type === "kind" ? route.entry.id : null;
 }
 
 /// A nav row for one kind, at the indent the sections use.
@@ -126,16 +96,14 @@ function itemClass(active: boolean) {
 function NavItem({
   item,
   active,
-  disabled,
   onSelect,
 }: {
   item: Item;
   active: boolean;
-  disabled: boolean;
   onSelect: () => void;
 }) {
   return (
-    <button onClick={onSelect} disabled={disabled} className={itemClass(active)}>
+    <button onClick={onSelect} className={itemClass(active)}>
       <span
         aria-hidden
         className={`w-3.5 text-center text-xs ${active ? item.tint : "text-content-muted group-hover:" + item.tint}`}
@@ -157,13 +125,11 @@ function NavItem({
 /// already in the sections above, and the rest are on the index page.
 function CrdSection({
   selectedId,
-  enabled,
   onOpenIndex,
   onSelectKind,
   indexActive,
 }: {
   selectedId: string | null;
-  enabled: boolean;
   onOpenIndex: () => void;
   onSelectKind: (entry: KindEntry) => void;
   indexActive: boolean;
@@ -176,7 +142,6 @@ function CrdSection({
     // Shared with the index page, and the API surface only changes when
     // someone installs a CRD — not worth rediscovering per mount.
     staleTime: 5 * 60 * 1000,
-    enabled,
   });
 
   const crds: { entry: KindEntry; resource: ApiResourceInfo }[] = (q.data ?? [])
@@ -207,7 +172,6 @@ function CrdSection({
             setOpen(true);
             onOpenIndex();
           }}
-          disabled={!enabled}
           className={`${itemClass(indexActive)} mb-0 flex-1`}
         >
           <span
@@ -228,7 +192,7 @@ function CrdSection({
             to the index are not the same click. */}
         <button
           onClick={() => setOpen((o) => !o)}
-          disabled={!enabled || crds.length === 0}
+          disabled={crds.length === 0}
           aria-expanded={open}
           aria-label={open ? "Collapse CRDs" : "Expand CRDs"}
           className="ml-0.5 rounded px-1.5 text-2xs text-content-muted transition-colors hover:bg-content/[0.05] hover:text-content disabled:opacity-0"
@@ -275,17 +239,12 @@ function CrdSection({
 }
 
 export function Sidebar({
-  cluster,
-  view,
+  route,
   onSelect,
   theme,
   onThemeChange,
-  guard,
-  onGuardChange,
-  onSwitchCluster,
-  onDisconnect,
 }: SidebarProps) {
-  const selectedId = selectedKindId(view);
+  const selectedId = selectedKindId(route);
 
   return (
     <aside className="glass flex w-60 shrink-0 flex-col border-r">
@@ -307,9 +266,8 @@ export function Sidebar({
           <NavItem
             key={item.id}
             item={item}
-            active={view.type === item.id}
-            disabled={!cluster}
-            onSelect={() => onSelect({ type: item.id } as View)}
+            active={route.type === item.id}
+            onSelect={() => onSelect({ type: item.id })}
           />
         ))}
 
@@ -332,81 +290,26 @@ export function Sidebar({
         <SectionLabel>Extensions</SectionLabel>
         <CrdSection
           selectedId={selectedId}
-          indexActive={view.type === "crds"}
-          enabled={cluster != null}
+          indexActive={route.type === "crds"}
           onOpenIndex={() => onSelect({ type: "crds" })}
           onSelectKind={(entry) => onSelect({ type: "kind", entry })}
         />
 
         <NavItem
           item={HELM}
-          active={view.type === "helm"}
-          disabled={!cluster}
+          active={route.type === "helm"}
           onSelect={() => onSelect({ type: "helm" })}
         />
       </nav>
 
       {/* Above the theme picker: a running forward is state the user is
           holding, and it belongs where they will notice it. */}
-      {cluster && <ForwardsPanel />}
+      <ForwardsPanel />
 
       <div className="border-t p-2">
         <ThemePicker theme={theme} onChange={onThemeChange} />
       </div>
 
-      {cluster && (
-        <div className="border-t p-2">
-          {/* The cluster chip doubles as the context switcher — the
-              thing people reach for most after picking the wrong one. */}
-          <button
-            onClick={onSwitchCluster}
-            title={`${cluster.server}\nClick to switch cluster`}
-            className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors duration-150 ease-swift hover:bg-content/[0.05]"
-          >
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${GUARD_DOT[guard]}`}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs font-medium">
-                {cluster.context}
-              </span>
-              <span className="block truncate text-2xs text-content-muted">
-                {guard === "open" ? (
-                  cluster.version
-                ) : (
-                  // Replaces the version rather than sitting beside it:
-                  // on a cluster you have marked, this is the thing
-                  // worth reading.
-                  <span className={GUARD_TONE[guard]}>{GUARD_LABEL[guard]}</span>
-                )}
-              </span>
-            </span>
-            <span className="shrink-0 text-xs text-content-muted transition-colors group-hover:text-content-secondary">
-              ⇄
-            </span>
-          </button>
-
-          <div className="mt-1 flex items-center gap-1.5 px-2">
-            <span className="shrink-0 text-2xs text-content-muted">Writes</span>
-            <Select
-              value={guard}
-              onChange={(v) => onGuardChange(v as Guard)}
-              title="What this context allows. Loupe's own safeguard, not RBAC — it does not change your permissions."
-            >
-              <option value="open">Allowed</option>
-              <option value="protected">Confirm each</option>
-              <option value="readOnly">Refused</option>
-            </Select>
-          </div>
-
-          <button
-            onClick={onDisconnect}
-            className="mt-1 w-full rounded px-2 py-1 text-left text-2xs text-content-muted transition-colors hover:bg-content/[0.05] hover:text-content-secondary"
-          >
-            Disconnect
-          </button>
-        </div>
-      )}
     </aside>
   );
 }
