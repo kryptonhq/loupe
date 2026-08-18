@@ -97,7 +97,11 @@ export function DetailShell({
 
       {error != null && <ErrorStrip error={error} />}
 
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      {/* The content plane, same as Panel's — a detail view and a
+          listing are the same kind of surface and must not differ. */}
+      <div className="min-h-0 flex-1 overflow-hidden bg-surface-1">
+        {children}
+      </div>
     </section>
   );
 }

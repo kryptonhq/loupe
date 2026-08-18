@@ -59,7 +59,11 @@ export function Panel({
 
       {error != null && <ErrorStrip error={error} />}
 
-      <div className="min-h-0 flex-1">{children}</div>
+      {/* The content plane. Without it a listing sits on the window's
+          own background, which is dimmer than the glass framing it —
+          so the table, the largest thing on screen, reads as the
+          dullest. */}
+      <div className="min-h-0 flex-1 bg-surface-1">{children}</div>
     </section>
   );
 }

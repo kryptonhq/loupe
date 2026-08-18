@@ -12,11 +12,20 @@
 
 :root {
   /* Neutrals carry a slight blue cast. Pure grey next to the indigo
-     accent reads as dirty; the cast keeps the whole surface coherent. */
-  --base: 242 244 248;
+     accent reads as dirty; the cast keeps the whole surface coherent.
+     Content is the exception and is deliberately paper-white: it is the
+     plane you read a table off, and it should be the brightest thing on
+     screen.
+   *
+   * The ladder runs base → glass → content, in that order of lightness,
+   * and it has to stay in that order. It did not before: content had no
+   * surface of its own, so a table sat on `base` while every bar of
+   * chrome around it was 72% white — which put the chrome in front of
+   * the data and left the largest area on screen the dullest. */
+  --base: 237 240 246;
   --surface-1: 255 255 255;
-  --surface-2: 255 255 255;
-  --surface-3: 236 239 244;
+  --surface-2: 248 250 253;
+  --surface-3: 238 241 247;
 
   --border: 15 23 42;
   --border-alpha: 0.09;
@@ -36,8 +45,12 @@
 
   /* Glass: how much of the layer beneath shows through, and how hard
      the highlight along its top edge is. Tuned separately per theme
-     because translucency reads very differently on light and dark. */
-  --glass-bg: 255 255 255;
+     because translucency reads very differently on light and dark.
+   *
+     Tinted toward the base rather than to pure white. Chrome is the
+     frame, so it belongs between the ground and the content — white
+     glass over a light base lands brighter than the content it frames. */
+  --glass-bg: 247 249 252;
   --glass-alpha: 0.72;
   --glass-highlight: 0.9;
   --glass-blur: 20px;
@@ -78,10 +91,14 @@
 }
 
 .dark {
+  /* Same ladder, same order: base → glass → content. Dark had it very
+     nearly flat — glass composited to within a level or two of
+     surface-1 — so the content plane is lifted and the chrome dimmed
+     until the three are distinguishable. */
   --base: 9 11 16;
-  --surface-1: 15 18 25;
-  --surface-2: 20 24 33;
-  --surface-3: 27 32 43;
+  --surface-1: 17 21 29;
+  --surface-2: 23 27 37;
+  --surface-3: 30 35 47;
 
   --border: 255 255 255;
   --border-alpha: 0.08;
@@ -99,7 +116,7 @@
   --danger: 251 113 133;
   --info: 56 189 248;
 
-  --glass-bg: 20 24 33;
+  --glass-bg: 15 18 26;
   --glass-alpha: 0.62;
   --glass-highlight: 0.06;
   --glass-blur: 24px;
@@ -127,9 +144,16 @@
  * and the OS is blurring the desktop behind us — the opaque background
  * has to get out of the way. Set by the Rust side on startup so the
  * frontend never guesses at platform support.
+ *
+ * It is the window's ground that gets out of the way, not the content.
+ * This used to repoint `--surface-1` at the glass colour, which was
+ * harmless only because nothing painted with surface-1; now that it is
+ * the plane a table is read off, turning it translucent would put the
+ * desktop behind the data and undo the reason it has a surface at all.
+ * The chrome is already glass in its own right, through `.glass`.
  */
 .vibrancy {
-  --surface-1: var(--glass-bg);
+  --base: var(--glass-bg);
 }
 
 /* Translucent, not transparent. A fully transparent body leaves the
