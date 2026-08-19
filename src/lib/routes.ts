@@ -1,5 +1,5 @@
 import type { GvkRef } from "./api";
-import type { KindEntry } from "./kinds";
+import { KIND_SECTIONS, type KindEntry } from "./kinds";
 
 // What the main area can be showing.
 //
@@ -131,6 +131,77 @@ export function isDetail(route: Route): boolean {
     route.type === "release" ||
     route.type === "object"
   );
+}
+
+/// The rail's own entry for a kind, so a breadcrumb says "DaemonSets"
+/// the way the rail does rather than "DaemonSet" the way the API does.
+/// Falls back to the bare kind for anything not in the rail, which is
+/// every custom resource.
+function kindEntryFor(gvk: GvkRef): KindEntry {
+  const id = `${gvk.group}/${gvk.version}/${gvk.kind}`;
+  for (const section of KIND_SECTIONS) {
+    const match = section.items.find((entry) => entry.id === id);
+    if (match) return match;
+  }
+  return { id, label: gvk.kind, gvk };
+}
+
+/// One step in the breadcrumb.
+export interface Crumb {
+  label: string;
+  /// The long form, for the tooltip.
+  title: string;
+  /// Where it goes, or null for the step you are already standing on.
+  route: Route | null;
+}
+
+/// The breadcrumb for a route.
+///
+/// This describes where an object sits, not how you came to be looking
+/// at it. Those are different questions and only one of them makes a
+/// breadcrumb: a trail of visited routes reads "Nodes › Pods › some-pod
+/// › Jobs › DaemonSets › some-daemonset", which is a record of wandering
+/// and implies a containment that does not exist. Where you have been is
+/// what the back and forward arrows are for.
+///
+/// So the crumbs are derived from the current route alone — its kind's
+/// listing, its namespace, and itself.
+export function crumbsFor(route: Route): Crumb[] {
+  const at = (r: Route, current: boolean): Crumb => ({
+    label: routeLabel(r),
+    title: routeTitle(r),
+    route: current ? null : r,
+  });
+  const here = at(route, true);
+  const namespaceOf = (name: string) => at({ type: "namespace", name }, false);
+
+  switch (route.type) {
+    case "node":
+      return [at({ type: "nodes" }, false), here];
+
+    case "namespace":
+      return [at({ type: "namespaces" }, false), here];
+
+    case "pod":
+      return [at({ type: "pods" }, false), namespaceOf(route.namespace), here];
+
+    case "release":
+      return [at({ type: "helm" }, false), namespaceOf(route.namespace), here];
+
+    case "object": {
+      const listing: Route = { type: "kind", entry: kindEntryFor(route.resource) };
+      // Cluster-scoped objects have no namespace to sit in, and an empty
+      // crumb between the kind and the name would only be noise.
+      return route.namespace
+        ? [at(listing, false), namespaceOf(route.namespace), here]
+        : [at(listing, false), here];
+    }
+
+    default:
+      // A listing is the top of its own hierarchy; there is nothing above
+      // Pods to put in front of it.
+      return [here];
+  }
 }
 
 /// The listing a detail route belongs under, so opening an object from

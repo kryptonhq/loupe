@@ -9,13 +9,11 @@ import {
   currentRoute,
   goBack,
   goForward,
-  goTo,
   navigate,
   newWorkspace,
   openInNewTab,
   selectIndex,
   selectTab,
-  trail,
 } from "./workspace";
 
 const pods: Route = { type: "pods" };
@@ -27,7 +25,10 @@ function pod(name: string): Route {
 }
 
 function labels(ws: ReturnType<typeof newWorkspace>) {
-  return trail(activeTab(ws)).map((r) => (r.type === "pod" ? r.name : r.type));
+  const tab = activeTab(ws);
+  return tab.history
+    .slice(0, tab.index + 1)
+    .map((r) => (r.type === "pod" ? r.name : r.type));
 }
 
 describe("newWorkspace", () => {
@@ -93,23 +94,6 @@ describe("back and forward", () => {
     const ws = newWorkspace();
     expect(goBack(ws)).toBe(ws);
     expect(goForward(ws)).toBe(ws);
-  });
-});
-
-describe("goTo", () => {
-  it("jumps to a position in the trail and keeps what is ahead", () => {
-    let ws = newWorkspace();
-    ws = navigate(ws, pods);
-    ws = navigate(ws, pod("api-1"));
-    ws = goTo(ws, 0);
-    expect(currentRoute(ws)).toEqual(nodes);
-    expect(canGoForward(activeTab(ws))).toBe(true);
-  });
-
-  it("ignores an index outside the history", () => {
-    const ws = newWorkspace();
-    expect(goTo(ws, 4)).toBe(ws);
-    expect(goTo(ws, -1)).toBe(ws);
   });
 });
 

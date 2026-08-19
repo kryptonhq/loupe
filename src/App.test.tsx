@@ -204,16 +204,19 @@ describe("App navigation", () => {
 // object keeps the listing it came from, that back retraces the trip,
 // and that a tab is a piece of work you can leave and return to.
 describe("App workspace", () => {
-  it("keeps the listing behind an object it opened", async () => {
+  it("says where an object sits, not how it was reached", async () => {
+    // Reached by way of Nodes, but a pod does not live under Nodes. The
+    // crumbs are derived from the pod itself: its listing, its
+    // namespace, its name. Where you have been is the arrows' job.
     const user = renderApp();
     await screen.findByRole("heading", { name: "Nodes" });
 
     await openPod(user);
 
-    // The trail says where this came from, which is the whole difference
-    // between a tab and a page that replaced another.
-    const trail = screen.getByRole("navigation", { name: "Trail" });
-    expect(within(trail).getByTitle(/Back to Pods/)).toBeInTheDocument();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumbs).getByTitle(/Go to Pods/)).toBeInTheDocument();
+    expect(within(crumbs).getByTitle(/Go to Namespace prod/)).toBeInTheDocument();
+    expect(within(crumbs).queryByTitle(/Nodes/)).not.toBeInTheDocument();
   });
 
   it("goes back to the listing and forward to the object again", async () => {
@@ -239,22 +242,22 @@ describe("App workspace", () => {
     expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
   });
 
-  it("walks back several steps from a crumb", async () => {
+  it("goes to the listing an object belongs to from its crumb", async () => {
     const user = renderApp();
     await screen.findByRole("heading", { name: "Nodes" });
     await openPod(user);
 
-    const trail = screen.getByRole("navigation", { name: "Trail" });
-    await user.click(within(trail).getByTitle(/Back to Nodes/));
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    await user.click(within(crumbs).getByTitle(/Go to Pods/));
 
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
   });
 
-  it("hides the trail at the top of a tab, where there is no path", async () => {
+  it("hides the bar on a listing opened fresh, where it would only repeat the heading", async () => {
     renderApp();
     await screen.findByRole("heading", { name: "Nodes" });
     expect(
-      screen.queryByRole("navigation", { name: "Trail" }),
+      screen.queryByRole("navigation", { name: "Breadcrumb" }),
     ).not.toBeInTheDocument();
   });
 

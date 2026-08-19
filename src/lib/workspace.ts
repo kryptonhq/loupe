@@ -63,11 +63,6 @@ export function canGoForward(tab: Tab): boolean {
   return tab.index < tab.history.length - 1;
 }
 
-/// The trail behind the tab, oldest first, ending at what is on screen.
-export function trail(tab: Tab): Route[] {
-  return tab.history.slice(0, tab.index + 1);
-}
-
 function replaceTab(ws: Workspace, id: string, next: Tab): Workspace {
   return { ...ws, tabs: ws.tabs.map((t) => (t.id === id ? next : t)) };
 }
@@ -158,11 +153,3 @@ export function goForward(ws: Workspace): Workspace {
   return replaceTab(ws, tab.id, { ...tab, index: tab.index + 1 });
 }
 
-/// Jump to a position in the active tab's trail — what clicking a
-/// breadcrumb does. Forward history is kept, so a crumb click is a
-/// several-step back rather than a new navigation.
-export function goTo(ws: Workspace, index: number): Workspace {
-  const tab = activeTab(ws);
-  if (index < 0 || index >= tab.history.length) return ws;
-  return replaceTab(ws, tab.id, { ...tab, index });
-}

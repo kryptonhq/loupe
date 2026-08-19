@@ -22,6 +22,7 @@ import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
 import {
+  crumbsFor,
   parentOf,
   routeKey,
   type OpenIntent,
@@ -36,13 +37,11 @@ import {
   currentRoute,
   goBack,
   goForward,
-  goTo,
   navigate,
   newWorkspace,
   openInNewTab,
   selectIndex,
   selectTab,
-  trail,
   type Workspace,
 } from "./lib/workspace";
 
@@ -79,6 +78,7 @@ export default function App() {
 
   const tab = activeTab(workspace);
   const route = currentRoute(workspace);
+  const crumbs = crumbsFor(route);
 
   /// Go somewhere. `intent` is how the click asked to be handled — this
   /// tab, or one of its own — and is what makes ⌘-clicking a row fan a
@@ -422,17 +422,19 @@ export default function App() {
               }
             />
 
-            {/* Only once there is a path to show. At the top of a tab
-                there is nothing behind you, and a bar holding two
-                disabled arrows is chrome paying no rent. */}
-            {canGoBack(tab) && (
+            {/* Shown when it has something to say: an object sitting
+                somewhere, or a history worth stepping through. On a
+                listing opened fresh it is one crumb repeating the
+                heading below it and two dead arrows — chrome paying no
+                rent. */}
+            {(crumbs.length > 1 || canGoBack(tab) || canGoForward(tab)) && (
               <TrailBar
-                trail={trail(tab)}
+                crumbs={crumbs}
                 canBack={canGoBack(tab)}
                 canForward={canGoForward(tab)}
                 onBack={back}
                 onForward={() => setWorkspace(goForward)}
-                onCrumb={(i) => setWorkspace((ws) => goTo(ws, i))}
+                onCrumb={(to) => open(to)}
               />
             )}
 
