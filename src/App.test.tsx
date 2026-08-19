@@ -107,7 +107,9 @@ beforeEach(() => {
   listNodes.mockResolvedValue([
     { name: "worker-1", ready: true, roles: [], version: "v1.33.1", age: "1d" },
   ]);
-  vi.mocked(api.listNamespaces).mockResolvedValue([]);
+  vi.mocked(api.listNamespaces).mockResolvedValue([
+    { name: "prod", phase: "Active", age: "120d" },
+  ]);
   vi.mocked(api.listPods).mockResolvedValue([]);
   vi.mocked(api.listApiResources).mockResolvedValue([]);
   vi.mocked(api.listHelmReleases).mockResolvedValue([]);
@@ -144,6 +146,11 @@ beforeEach(() => {
     yaml: "apiVersion: v1\nkind: Pod\n",
   });
 });
+
+/// The namespace picker, told apart from the status bar's guard picker.
+function namespacePicker() {
+  return screen.getByRole("combobox", { name: /Namespace/i });
+}
 
 /// Open the pod list, then the one pod in it.
 async function openPod(user: ReturnType<typeof userEvent.setup>) {
@@ -398,6 +405,64 @@ describe("App workspace", () => {
     expect(
       await screen.findByRole("heading", { name: "Deployments" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the namespace filter across opening a pod and coming back", async () => {
+    // The filter used to live in the listing, and a listing unmounts the
+    // moment you open a row from it — so drilling into a pod and pressing
+    // back handed you every namespace again and a dropdown to re-pick.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByRole("button", { name: /Pods/ }));
+    await screen.findByText("web-abc");
+    await user.selectOptions(namespacePicker(), "prod");
+    await waitFor(() => expect(api.listPods).toHaveBeenCalledWith("prod"));
+
+    await user.click(await screen.findByText("web-abc"));
+    await screen.findByRole("heading", { name: "web-abc" });
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    await screen.findByRole("heading", { name: "Pods" });
+    await waitFor(() =>
+      expect(namespacePicker()).toHaveValue("prod"),
+    );
+  });
+
+  it("keeps a filter change out of the history", async () => {
+    // Scoping a listing is the same destination shown differently. If it
+    // pushed, back would mean "undo my last keystroke" and walking out of
+    // a listing would take one press per filter you had tried.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByRole("button", { name: /Pods/ }));
+    await screen.findByText("web-abc");
+    await user.selectOptions(namespacePicker(), "prod");
+    await waitFor(() => expect(api.listPods).toHaveBeenCalledWith("prod"));
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+  });
+
+  it("gives each tab its own filter", async () => {
+    // Two tabs on the same listing scoped to different namespaces is the
+    // point of a tab being a piece of work rather than a bookmark.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.click(screen.getByRole("button", { name: /Pods/ }));
+    await screen.findByText("web-abc");
+    await user.selectOptions(namespacePicker(), "prod");
+    await waitFor(() => expect(namespacePicker()).toHaveValue("prod"));
+
+    await user.keyboard("{Meta>}t{/Meta}");
+    await screen.findByRole("heading", { name: "Pods" });
+    await user.selectOptions(namespacePicker(), "");
+
+    await user.keyboard("{Meta>}1{/Meta}");
+    await waitFor(() => expect(namespacePicker()).toHaveValue("prod"));
   });
 
   it("starts a fresh workspace when the cluster changes", async () => {

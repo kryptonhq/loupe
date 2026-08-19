@@ -1,5 +1,6 @@
 import type { GvkRef } from "./api";
 import { KIND_SECTIONS, type KindEntry } from "./kinds";
+import type { SortState } from "./sort";
 
 // What the main area can be showing.
 //
@@ -13,13 +14,30 @@ import { KIND_SECTIONS, type KindEntry } from "./kinds";
 // objects at once. The pages are now listings and detail views that
 // report where they want to go; where that lands is decided here.
 
+/// How a listing is presented: the namespace it is scoped to, the text
+/// narrowing it, how it is sorted, and whether the wide columns are out.
+///
+/// This rides on the route rather than in the page's own state because a
+/// page unmounts the moment you open something from it. Holding it here
+/// means the filter you set survives opening a pod and coming back, two
+/// tabs on the same kind can be scoped to different namespaces, and a
+/// route is a full description of what is on screen rather than half of
+/// one.
+export interface ListView {
+  /// Empty string means every namespace, matching `kubectl -A`.
+  namespace?: string;
+  query?: string;
+  sort?: SortState | null;
+  wide?: boolean;
+}
+
 export type Route =
-  | { type: "nodes" }
-  | { type: "namespaces" }
-  | { type: "pods" }
-  | { type: "crds" }
-  | { type: "helm" }
-  | { type: "kind"; entry: KindEntry }
+  | { type: "nodes"; view?: ListView }
+  | { type: "namespaces"; view?: ListView }
+  | { type: "pods"; view?: ListView }
+  | { type: "crds"; view?: ListView }
+  | { type: "helm"; view?: ListView }
+  | { type: "kind"; entry: KindEntry; view?: ListView }
   | { type: "node"; name: string }
   | { type: "namespace"; name: string }
   | { type: "pod"; namespace: string; name: string }
@@ -51,6 +69,11 @@ export function intentOf(e: {
 /// navigating to one you are already on is a no-op rather than a
 /// duplicate history entry, and a row you have already opened can be
 /// found in an existing tab instead of opening a second one.
+///
+/// Deliberately blind to `view`: a listing at a different namespace is
+/// the same destination presented differently, not somewhere new. That
+/// is what keeps a rail click on the listing you are already reading
+/// from throwing away the filter you set on it.
 export function routeKey(route: Route): string {
   switch (route.type) {
     case "kind":
@@ -131,6 +154,16 @@ export function isDetail(route: Route): boolean {
     route.type === "release" ||
     route.type === "object"
   );
+}
+
+/// The view a listing is currently showing, or an empty one.
+export function listViewOf(route: Route): ListView {
+  return "view" in route && route.view ? route.view : {};
+}
+
+/// The same route, presented differently.
+export function withListView(route: Route, patch: Partial<ListView>): Route {
+  return { ...route, view: { ...listViewOf(route), ...patch } } as Route;
 }
 
 /// The rail's own entry for a kind, so a breadcrumb says "DaemonSets"

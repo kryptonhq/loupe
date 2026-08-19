@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
@@ -12,7 +11,7 @@ import {
   type NodeSummary,
   type PodSummary,
 } from "../lib/api";
-import type { OpenIntent } from "../lib/routes";
+import type { ListView, OpenIntent } from "../lib/routes";
 
 // The three listings that have a view of their own rather than a
 // server-printed table.
@@ -25,6 +24,12 @@ import type { OpenIntent } from "../lib/routes";
 
 interface ListProps<T> {
   onOpen: (target: T, intent: OpenIntent) => void;
+  /// How this listing is presented. Held by the caller, because a
+  /// listing unmounts the moment you open a row from it — and a
+  /// namespace filter that has to be re-picked every time you look at a
+  /// pod is worse than no filter at all.
+  view: ListView;
+  onView: (patch: Partial<ListView>) => void;
 }
 
 /// Worst first. Sorting a status column alphabetically puts Failed
@@ -32,7 +37,7 @@ interface ListProps<T> {
 /// what the tone already says about how much attention it wants.
 const PHASE_ORDER = ["danger", "warn", "ok", "unknown"] as const;
 
-export function Nodes({ onOpen }: ListProps<NodeSummary>) {
+export function Nodes({ onOpen, view, onView }: ListProps<NodeSummary>) {
   const q = useQuery({
     queryKey: ["nodes"],
     queryFn: () => api.listNodes(),
@@ -92,12 +97,14 @@ export function Nodes({ onOpen }: ListProps<NodeSummary>) {
         searchText={(n) => `${n.name} ${n.roles.join(" ")} ${n.version}`}
         empty="No nodes visible."
         onRowClick={onOpen}
+        view={view}
+        onView={onView}
       />
     </Panel>
   );
 }
 
-export function Namespaces({ onOpen }: ListProps<NamespaceSummary>) {
+export function Namespaces({ onOpen, view, onView }: ListProps<NamespaceSummary>) {
   const q = useQuery({
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
@@ -140,14 +147,17 @@ export function Namespaces({ onOpen }: ListProps<NamespaceSummary>) {
         searchText={(n) => `${n.name} ${n.phase}`}
         empty="No namespaces visible."
         onRowClick={onOpen}
+        view={view}
+        onView={onView}
       />
     </Panel>
   );
 }
 
-export function Pods({ onOpen }: ListProps<PodSummary>) {
+export function Pods({ onOpen, view, onView }: ListProps<PodSummary>) {
   // Empty string means all namespaces, matching kubectl -A.
-  const [namespace, setNamespace] = useState("");
+  const namespace = view.namespace ?? "";
+  const setNamespace = (next: string) => onView({ namespace: next });
 
   const pods = useQuery({
     queryKey: ["pods", namespace],
@@ -231,8 +241,14 @@ export function Pods({ onOpen }: ListProps<PodSummary>) {
         searchText={(p) => `${p.name} ${p.namespace} ${p.phase} ${p.node ?? ""}`}
         empty="No pods visible."
         onRowClick={onOpen}
+        view={view}
+        onView={onView}
         toolbar={
-          <Select value={namespace} onChange={setNamespace}>
+          <Select
+            title="Namespace"
+            value={namespace}
+            onChange={setNamespace}
+          >
             <option value="">All namespaces</option>
             {(namespaces.data ?? []).map((ns) => (
               <option key={ns.name} value={ns.name}>

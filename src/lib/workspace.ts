@@ -87,6 +87,20 @@ export function navigate(ws: Workspace, route: Route): Workspace {
   });
 }
 
+/// Swap what the active tab is showing, without adding to its history.
+///
+/// For a change to how a listing is presented — the namespace it is
+/// scoped to, the text filtering it, the column it is sorted by — rather
+/// than a move somewhere new. Pushing those would fill the history with
+/// one listing at every filter it has ever had, and make back mean "undo
+/// my last keystroke".
+export function replace(ws: Workspace, route: Route): Workspace {
+  const tab = activeTab(ws);
+  const history = [...tab.history];
+  history[tab.index] = route;
+  return replaceTab(ws, tab.id, { ...tab, history });
+}
+
 /// Open a route in a tab of its own and make it active.
 ///
 /// `under` seeds the history so the new tab has a trail — opening a pod

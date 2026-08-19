@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Table, type Column } from "./Table";
 import { SkeletonRows } from "./Skeleton";
-import type { OpenIntent } from "../lib/routes";
+import type { ListView, OpenIntent } from "../lib/routes";
 import { nextSort, sortRows, type SortState } from "../lib/sort";
 
 const PAGE_SIZE = 50;
@@ -27,6 +27,16 @@ export interface ResourceTableProps<T> {
   remaining?: number | null;
   loadingMore?: boolean;
   onLoadMore?: () => void;
+  /// The search text and sort, when the caller wants them to outlive
+  /// this component. A listing does: it unmounts the moment you open a
+  /// row, and a filter that evaporates on the way to a pod and back is
+  /// the filter you have to retype every time.
+  ///
+  /// Omitted by the small fixed tables inside a detail view, which are
+  /// gone for good when you leave and have nothing worth keeping. They
+  /// fall back to holding it themselves.
+  view?: ListView;
+  onView?: (patch: Partial<ListView>) => void;
 }
 
 export function ResourceTable<T>({
@@ -42,12 +52,25 @@ export function ResourceTable<T>({
   remaining = null,
   loadingMore = false,
   onLoadMore,
+  view,
+  onView,
 }: ResourceTableProps<T>) {
-  const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
-  // Null is the order the server sent, which for a Kubernetes listing is
-  // meaningful in its own right — it is what `kubectl get` prints.
-  const [sort, setSort] = useState<SortState | null>(null);
+
+  // Held by the caller when it offered somewhere to hold it, and here
+  // otherwise. Null sort is the order the server sent, which for a
+  // Kubernetes listing is meaningful in its own right — it is what
+  // `kubectl get` prints.
+  const [ownQuery, setOwnQuery] = useState("");
+  const [ownSort, setOwnSort] = useState<SortState | null>(null);
+
+  const kept = onView != null;
+  const query = kept ? (view?.query ?? "") : ownQuery;
+  const sort = kept ? (view?.sort ?? null) : ownSort;
+  const setQuery = (next: string) =>
+    kept ? onView({ query: next }) : setOwnQuery(next);
+  const setSort = (next: SortState | null) =>
+    kept ? onView({ sort: next }) : setOwnSort(next);
 
   const filtered = useMemo(() => {
     if (!rows) return [];
@@ -72,7 +95,7 @@ export function ResourceTable<T>({
   }, [filtered, sort, columns]);
 
   function chooseSort(key: string) {
-    setSort((current) => nextSort(current, key));
+    setSort(nextSort(sort, key));
     // The row that was on page 3 is somewhere else entirely now.
     setPage(0);
   }

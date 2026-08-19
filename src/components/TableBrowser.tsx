@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Panel } from "./Panel";
 import { ResourceTable } from "./ResourceTable";
@@ -6,7 +6,7 @@ import { type Column } from "./Table";
 import { Select } from "./Select";
 import { StatusDot } from "./StatusDot";
 import { api, type GvkRef, type TableRow } from "../lib/api";
-import type { OpenIntent } from "../lib/routes";
+import type { ListView, OpenIntent } from "../lib/routes";
 import { useWatch } from "../lib/useWatch";
 import { statusTone } from "../pages/ObjectDetail";
 
@@ -45,6 +45,10 @@ interface TableBrowserProps {
   onOpen: (row: TableRow, intent: OpenIntent) => void;
   /// Extra controls for the panel header.
   actions?: React.ReactNode;
+  /// How this listing is presented, held by the caller so it survives
+  /// opening a row and coming back.
+  view: ListView;
+  onView: (patch: Partial<ListView>) => void;
 }
 
 export function TableBrowser({
@@ -53,12 +57,16 @@ export function TableBrowser({
   subtitle,
   onOpen,
   actions,
+  view,
+  onView,
 }: TableBrowserProps) {
-  const [namespace, setNamespace] = useState("");
+  const namespace = view.namespace ?? "";
+  const setNamespace = (next: string) => onView({ namespace: next });
   // Kubectl calls these `-o wide`. Off by default for the same reason:
   // Selector and Images columns are long enough to squeeze everything
   // else off a narrow pane.
-  const [wide, setWide] = useState(false);
+  const wide = view.wide ?? false;
+  const setWide = (next: boolean) => onView({ wide: next });
 
   // Fetched a page at a time. Asking for everything meant a busy cluster
   // pulled 20,000 objects across the IPC boundary before the first fifty
@@ -182,10 +190,16 @@ export function TableBrowser({
         remaining={lastPage?.remaining ?? null}
         loadingMore={q.isFetchingNextPage}
         onLoadMore={() => q.fetchNextPage()}
+        view={view}
+        onView={onView}
         toolbar={
           <>
             {table?.namespaced && (
-              <Select value={namespace} onChange={setNamespace}>
+              <Select
+                title="Namespace"
+                value={namespace}
+                onChange={setNamespace}
+              >
                 <option value="">All namespaces</option>
                 {(namespaces.data ?? []).map((ns) => (
                   <option key={ns.name} value={ns.name}>

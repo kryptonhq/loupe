@@ -23,8 +23,11 @@ import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
 import {
   crumbsFor,
+  listViewOf,
   parentOf,
   routeKey,
+  withListView,
+  type ListView,
   type OpenIntent,
   type Route,
 } from "./lib/routes";
@@ -40,6 +43,7 @@ import {
   navigate,
   newWorkspace,
   openInNewTab,
+  replace,
   selectIndex,
   selectTab,
   type Workspace,
@@ -100,6 +104,14 @@ export default function App() {
       const under = parentOf(next);
       return under ? openInNewTab(ws, next, under) : navigate(ws, next);
     });
+  }
+
+  /// Change how the listing on screen is presented — its namespace, its
+  /// search text, its sort. Replaces rather than pushes: this is the
+  /// same destination shown differently, and pushing would make back
+  /// mean "undo my last keystroke".
+  function changeView(patch: Partial<ListView>) {
+    setWorkspace((ws) => replace(ws, withListView(currentRoute(ws), patch)));
   }
 
   const back = () => setWorkspace(goBack);
@@ -439,7 +451,12 @@ export default function App() {
             )}
 
             <div className="min-h-0 flex-1">
-              <View route={route} open={open} back={back} />
+              <View
+                route={route}
+                open={open}
+                back={back}
+                onView={changeView}
+              />
             </div>
           </main>
         </div>
@@ -477,19 +494,31 @@ function View({
   route,
   open,
   back,
+  onView,
 }: {
   route: Route;
   open: (route: Route, intent?: OpenIntent) => void;
   back: () => void;
+  onView: (patch: Partial<ListView>) => void;
 }) {
+  const view = listViewOf(route);
+
   switch (route.type) {
     case "nodes":
-      return <Nodes onOpen={(n, i) => open({ type: "node", name: n.name }, i)} />;
+      return (
+        <Nodes
+          onOpen={(n, i) => open({ type: "node", name: n.name }, i)}
+          view={view}
+          onView={onView}
+        />
+      );
 
     case "namespaces":
       return (
         <Namespaces
           onOpen={(n, i) => open({ type: "namespace", name: n.name }, i)}
+          view={view}
+          onView={onView}
         />
       );
 
@@ -499,6 +528,8 @@ function View({
           onOpen={(p, i) =>
             open({ type: "pod", namespace: p.namespace, name: p.name }, i)
           }
+          view={view}
+          onView={onView}
         />
       );
 
@@ -511,6 +542,8 @@ function View({
           onOpen={(r, i) =>
             open({ type: "release", namespace: r.namespace, name: r.name }, i)
           }
+          view={view}
+          onView={onView}
         />
       );
 
@@ -529,6 +562,8 @@ function View({
               i,
             )
           }
+          view={view}
+          onView={onView}
         />
       );
 

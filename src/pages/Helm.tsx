@@ -16,7 +16,7 @@ import {
   type ReleaseRevision,
   type ReleaseSummary,
 } from "../lib/api";
-import type { OpenIntent } from "../lib/routes";
+import type { ListView, OpenIntent } from "../lib/routes";
 
 // Helm releases, read out of the release Secrets rather than the CLI.
 //
@@ -182,10 +182,15 @@ export function ReleaseDetail({
 
 export function Helm({
   onOpen,
+  view,
+  onView,
 }: {
   onOpen: (release: ReleaseSummary, intent: OpenIntent) => void;
+  view: ListView;
+  onView: (patch: Partial<ListView>) => void;
 }) {
-  const [namespace, setNamespace] = useState("");
+  const namespace = view.namespace ?? "";
+  const setNamespace = (next: string) => onView({ namespace: next });
 
   const q = useQuery({
     queryKey: ["helm-releases", namespace],
@@ -238,8 +243,14 @@ export function Helm({
         searchText={(r) => `${r.name} ${r.namespace} ${r.chart} ${r.status}`}
         empty="No Helm releases. Loupe reads the default secret driver; a cluster configured for the configmap or SQL backend keeps them elsewhere."
         onRowClick={onOpen}
+        view={view}
+        onView={onView}
         toolbar={
-          <Select value={namespace} onChange={setNamespace}>
+          <Select
+            title="Namespace"
+            value={namespace}
+            onChange={setNamespace}
+          >
             <option value="">All namespaces</option>
             {(namespaces.data ?? []).map((ns) => (
               <option key={ns.name} value={ns.name}>

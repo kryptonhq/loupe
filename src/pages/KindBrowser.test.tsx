@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { KindBrowser } from "./KindBrowser";
 import { api, type ResourceTable } from "../lib/api";
 import type { KindEntry } from "../lib/kinds";
+import type { ListView } from "../lib/routes";
 
 vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
@@ -36,6 +37,7 @@ const listTable = vi.mocked(api.listTable);
 const listNamespaces = vi.mocked(api.listNamespaces);
 
 const onOpen = vi.fn();
+const onView = vi.fn();
 
 function kind(name: string): KindEntry {
   return {
@@ -67,13 +69,18 @@ function table(rowName: string): ResourceTable {
   };
 }
 
-function renderBrowser(entry: KindEntry) {
+function renderBrowser(entry: KindEntry, listView: ListView = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <KindBrowser entry={entry} onOpen={onOpen} />
+      <KindBrowser
+        entry={entry}
+        onOpen={onOpen}
+        view={listView}
+        onView={onView}
+      />
     </QueryClientProvider>,
   );
   return {
@@ -81,7 +88,7 @@ function renderBrowser(entry: KindEntry) {
     switchTo: (next: KindEntry) =>
       view.rerender(
         <QueryClientProvider client={client}>
-          <KindBrowser entry={next} onOpen={onOpen} />
+          <KindBrowser entry={next} onOpen={onOpen} view={{}} onView={onView} />
         </QueryClientProvider>,
       ),
   };
@@ -89,6 +96,7 @@ function renderBrowser(entry: KindEntry) {
 
 beforeEach(() => {
   onOpen.mockReset();
+  onView.mockReset();
   listTable.mockReset();
   listNamespaces.mockReset();
 
@@ -113,6 +121,12 @@ describe("KindBrowser", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("checkbox", { name: /wide/i }));
+    expect(onView).toHaveBeenCalledWith({ wide: true });
+  });
+
+  it("shows the wide columns when the view asks for them", async () => {
+    renderBrowser(AGENT, { wide: true });
+    await screen.findByText("mcp-hello");
     expect(
       screen.getByRole("columnheader", { name: "Selector" }),
     ).toBeInTheDocument();

@@ -1,6 +1,6 @@
 import { TableBrowser } from "../components/TableBrowser";
 import type { KindEntry } from "../lib/kinds";
-import type { OpenIntent } from "../lib/routes";
+import type { ListView, OpenIntent } from "../lib/routes";
 import type { TableRow } from "../lib/api";
 
 // One kind's listing, with the columns the API server printed.
@@ -21,9 +21,13 @@ import type { TableRow } from "../lib/api";
 export function KindBrowser({
   entry,
   onOpen,
+  view,
+  onView,
 }: {
   entry: KindEntry;
   onOpen: (row: TableRow, intent: OpenIntent) => void;
+  view: ListView;
+  onView: (patch: Partial<ListView>) => void;
 }) {
   return (
     <TableBrowser
@@ -39,6 +43,8 @@ export function KindBrowser({
           : `core/${entry.gvk.version}`
       }
       onOpen={onOpen}
+      view={view}
+      onView={onView}
     />
   );
 }

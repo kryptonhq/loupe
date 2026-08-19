@@ -86,6 +86,7 @@ function detail(overrides: Partial<ReleaseDetail> = {}): ReleaseDetail {
 }
 
 const onOpen = vi.fn();
+const onView = vi.fn();
 
 function client() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -94,7 +95,7 @@ function client() {
 function renderHelm() {
   render(
     <QueryClientProvider client={client()}>
-      <Helm onOpen={onOpen} />
+      <Helm onOpen={onOpen} view={{}} onView={onView} />
     </QueryClientProvider>,
   );
   return userEvent.setup();
@@ -113,6 +114,7 @@ function renderRelease() {
 
 beforeEach(() => {
   onOpen.mockReset();
+  onView.mockReset();
   listHelmReleases.mockReset().mockResolvedValue([summary()]);
   getHelmRelease.mockReset().mockResolvedValue(detail());
   listNamespaces
@@ -137,11 +139,24 @@ describe("Helm release list", () => {
     expect(await screen.findByText(/secret driver/)).toBeInTheDocument();
   });
 
-  it("narrows to one namespace when picked", async () => {
+  it("reports the namespace it was asked to narrow to", async () => {
+    // The page reports; the workspace keeps it, so the filter survives
+    // opening a release and coming back.
     const user = renderHelm();
     await screen.findByText("prom");
 
     await user.selectOptions(screen.getByRole("combobox"), "monitoring");
+    await waitFor(() =>
+      expect(onView).toHaveBeenCalledWith({ namespace: "monitoring" }),
+    );
+  });
+
+  it("asks the cluster for the namespace the view names", async () => {
+    render(
+      <QueryClientProvider client={client()}>
+        <Helm onOpen={onOpen} view={{ namespace: "monitoring" }} onView={onView} />
+      </QueryClientProvider>,
+    );
     await waitFor(() =>
       expect(listHelmReleases).toHaveBeenCalledWith("monitoring"),
     );
