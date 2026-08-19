@@ -10,12 +10,13 @@ mod cluster;
 mod error;
 mod export;
 mod guard;
+mod menu;
 mod settings;
 mod vibrancy;
 
 use cluster::{ClusterInfo, ContextInfo, SharedSession};
 use error::Result;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 fn list_contexts() -> Result<Vec<ContextInfo>> {
@@ -562,6 +563,19 @@ fn set_theme(app: tauri::AppHandle, theme: settings::Theme) -> Result<settings::
     Ok(current)
 }
 
+/// Records the interface scale and returns the settings as stored.
+///
+/// Clamped on the way in: the frontend steps through a fixed set of
+/// sizes, but the command is reachable on its own, and a window drawn at
+/// twenty times its size has no way back to the control that fixes it.
+#[tauri::command]
+fn set_zoom(app: tauri::AppHandle, zoom: f64) -> Result<settings::Settings> {
+    let mut current = settings::load(&app);
+    current.zoom = settings::clamp_zoom(zoom);
+    settings::save(&app, &current)?;
+    Ok(current)
+}
+
 /// Whether native window vibrancy is actually active.
 ///
 /// The frontend asks at startup rather than guessing from the platform:
@@ -595,7 +609,21 @@ pub fn run() {
         .setup(|app| {
             app.manage(SharedSession::default());
             app.manage(VibrancyState(vibrancy::setup(app)));
+            // Losing the menu is a poor outcome; refusing to start over
+            // it is a worse one.
+            if let Err(e) = menu::install(app.handle()) {
+                eprintln!("[loupe] could not install the menu: {e}");
+            }
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            // The menu says what was asked for; the frontend owns what
+            // the current scale is and what the next one up looks like,
+            // so this forwards rather than decides.
+            let id = event.id().as_ref();
+            if matches!(id, menu::ZOOM_IN | menu::ZOOM_OUT | menu::ZOOM_RESET) {
+                let _ = app.emit(menu::ZOOM_EVENT, id);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_contexts,
@@ -644,6 +672,7 @@ pub fn run() {
             save_text,
             get_settings,
             set_theme,
+            set_zoom,
             set_context_pinned,
             context_guard,
             set_context_guard,

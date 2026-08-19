@@ -31,6 +31,7 @@ vi.mock("./lib/api", async (original) => {
       currentCluster: vi.fn(),
       getSettings: vi.fn(),
       setTheme: vi.fn(),
+      setZoom: vi.fn(),
       disconnect: vi.fn(),
       listContexts: vi.fn(),
       connect: vi.fn(),
@@ -77,6 +78,7 @@ function renderApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  document.documentElement.style.removeProperty("zoom");
 
   // jsdom has no matchMedia, and the theme effect reads it on mount.
   Object.defineProperty(window, "matchMedia", {
@@ -90,8 +92,8 @@ beforeEach(() => {
   });
 
   currentCluster.mockResolvedValue(CLUSTER);
-  getSettings.mockResolvedValue({ theme: "system", recentContexts: [], pinnedContexts: [] });
-  setTheme.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [] });
+  getSettings.mockResolvedValue({ theme: "system", recentContexts: [], pinnedContexts: [], zoom: 1 });
+  setTheme.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [], zoom: 1 });
   disconnect.mockResolvedValue(undefined);
   listContexts.mockResolvedValue([
     {
@@ -114,6 +116,12 @@ beforeEach(() => {
   vi.mocked(api.listApiResources).mockResolvedValue([]);
   vi.mocked(api.listHelmReleases).mockResolvedValue([]);
   vi.mocked(api.vibrancyEnabled).mockResolvedValue(false);
+  vi.mocked(api.setZoom).mockResolvedValue({
+    theme: "system",
+    recentContexts: [],
+    pinnedContexts: [],
+    zoom: 1,
+  });
   vi.mocked(api.listEvents).mockResolvedValue([]);
   vi.mocked(api.listRelated).mockResolvedValue([]);
   vi.mocked(api.listPods).mockResolvedValue([
@@ -638,6 +646,80 @@ describe("App command palette", () => {
   });
 });
 
+// Zoom is an accessibility control: 13px is too small for a good number
+// of people to read for an hour, and the alternative is resizing every
+// other window on the machine to fix one.
+describe("App zoom", () => {
+  it("scales the interface, and steps back to normal", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}={/Meta}");
+    await waitFor(() =>
+      expect(document.documentElement.style.zoom).toBe("1.1"),
+    );
+
+    await user.keyboard("{Meta>}0{/Meta}");
+    // Removed rather than set to 1, so the ordinary case leaves no trace.
+    await waitFor(() => expect(document.documentElement.style.zoom).toBe(""));
+  });
+
+  it("shrinks as well as grows", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}-{/Meta}");
+    await waitFor(() => expect(document.documentElement.style.zoom).toBe("0.9"));
+  });
+
+  it("remembers the size across launches", async () => {
+    // Someone who needs 150% needs it every time. Having to say so at
+    // every start is the same as not having the control.
+    getSettings.mockResolvedValue({
+      theme: "system",
+      recentContexts: [],
+      pinnedContexts: [],
+      zoom: 1.5,
+    });
+    renderApp();
+    await waitFor(() => expect(document.documentElement.style.zoom).toBe("1.5"));
+  });
+
+  it("persists a size the moment it changes", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}={/Meta}");
+    await waitFor(() => expect(api.setZoom).toHaveBeenCalledWith(1.1));
+  });
+
+  it("applies a size that failed to persist anyway", async () => {
+    // Same rule as the theme: the keystroke should land, and a size that
+    // could not be written is still the one that was asked for.
+    vi.mocked(api.setZoom).mockRejectedValue(new Error("disk full"));
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}={/Meta}");
+    await waitFor(() =>
+      expect(document.documentElement.style.zoom).toBe("1.1"),
+    );
+  });
+
+  it("ignores a stored size it cannot make sense of", async () => {
+    getSettings.mockResolvedValue({
+      theme: "system",
+      recentContexts: [],
+      pinnedContexts: [],
+      zoom: 40,
+    });
+    renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    // Clamped to the largest step the layout has been looked at in.
+    await waitFor(() => expect(document.documentElement.style.zoom).toBe("2"));
+  });
+});
+
 describe("App theme", () => {
   it("persists a chosen theme", async () => {
     const user = renderApp();
@@ -660,7 +742,7 @@ describe("App theme", () => {
   });
 
   it("honours a stored preference on launch", async () => {
-    getSettings.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [] });
+    getSettings.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [], zoom: 1 });
     renderApp();
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
   });

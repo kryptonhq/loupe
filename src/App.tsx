@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CommandPalette } from "./components/CommandPalette";
 import { ShortcutSheet } from "./components/ShortcutSheet";
@@ -21,6 +22,17 @@ import { Helm, ReleaseDetail } from "./pages/Helm";
 import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
+import {
+  applyZoom,
+  clampZoom,
+  DEFAULT_ZOOM,
+  ZOOM_EVENT,
+  ZOOM_IN,
+  ZOOM_OUT,
+  ZOOM_RESET,
+  zoomIn,
+  zoomOut,
+} from "./lib/zoom";
 import {
   crumbsFor,
   listViewOf,
@@ -68,6 +80,11 @@ export default function App() {
   // App owns the appearance: the picker sets it, the OS feeds into it
   // when the preference is "system", and one effect applies the result.
   const [theme, setTheme] = useState<Theme>("system");
+
+  // Interface scale. Stored rather than reset each launch, because
+  // someone who needs 150% needs it every time — a size you have to
+  // re-ask for at every start is the same as not having the control.
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
 
   // What the connected context allows. Held here because every write
   // path needs it and none of the pages in between should have to carry
@@ -119,10 +136,28 @@ export default function App() {
   useEffect(() => {
     api
       .getSettings()
-      .then((s) => setTheme(parseTheme(s.theme)))
+      .then((s) => {
+        setTheme(parseTheme(s.theme));
+        setZoom(clampZoom(s.zoom));
+      })
       // No settings file yet, or no bridge in browser dev. Following the
-      // system is the right fallback either way.
+      // system at the default size is the right fallback either way.
       .catch(() => {});
+  }, []);
+
+  useEffect(() => applyZoom(zoom), [zoom]);
+
+  // The menu says what was asked for and this decides what it means, so
+  // the menu item and the keystroke cannot drift apart.
+  useEffect(() => {
+    const unlisten = listen<string>(ZOOM_EVENT, (event) => {
+      if (event.payload === ZOOM_IN) changeZoom(zoomIn);
+      else if (event.payload === ZOOM_OUT) changeZoom(zoomOut);
+      else if (event.payload === ZOOM_RESET) changeZoom(() => DEFAULT_ZOOM);
+    });
+    // No bridge in browser dev, where there is no menu to listen to.
+    return () => void unlisten.then((off) => off()).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -260,6 +295,30 @@ export default function App() {
       label: "Disconnect",
       run: () => void disconnect(),
     });
+    // Reachable without the menu, which is macOS-only, and without the
+    // keystroke, which is the thing someone who needs this may be least
+    // able to discover.
+    out.push({
+      id: "action:zoom-in",
+      group: "Action",
+      label: "Zoom in",
+      keywords: "larger bigger text size accessibility",
+      run: () => changeZoom(zoomIn),
+    });
+    out.push({
+      id: "action:zoom-out",
+      group: "Action",
+      label: "Zoom out",
+      keywords: "smaller text size accessibility",
+      run: () => changeZoom(zoomOut),
+    });
+    out.push({
+      id: "action:zoom-reset",
+      group: "Action",
+      label: "Actual size",
+      keywords: "zoom reset 100%",
+      run: () => changeZoom(() => DEFAULT_ZOOM),
+    });
     out.push({
       id: "action:shortcuts",
       group: "Action",
@@ -320,6 +379,25 @@ export default function App() {
         return;
       }
 
+      // Zoom. Bound here as well as on the menu so it works on the
+      // platforms with no menu bar, and so `=` reaches it without the
+      // shift that would otherwise be needed to type `+`.
+      if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        changeZoom(zoomIn);
+        return;
+      }
+      if (mod && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        changeZoom(zoomOut);
+        return;
+      }
+      if (mod && e.key === "0") {
+        e.preventDefault();
+        changeZoom(() => DEFAULT_ZOOM);
+        return;
+      }
+
       // `?` only when not typing, or it cannot be typed into a filter.
       const target = e.target as HTMLElement | null;
       const typing =
@@ -345,6 +423,17 @@ export default function App() {
       // failed to apply, so put it back.
       await api.contextGuard(cluster.context).then(setGuard).catch(() => {});
     }
+  }
+
+  /// Step the scale and remember it. Applied first, like the theme: the
+  /// keystroke should land immediately, and a size that failed to
+  /// persist is still the one the user asked for.
+  function changeZoom(next: (level: number) => number) {
+    setZoom((level) => {
+      const to = clampZoom(next(level));
+      void api.setZoom(to).catch(() => {});
+      return to;
+    });
   }
 
   async function chooseTheme(next: Theme) {

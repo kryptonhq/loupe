@@ -14,6 +14,8 @@ const SHORTCUTS: { keys: string; what: string }[] = [
   { keys: "⌘1 … ⌘9", what: "Go to a tab by position" },
   { keys: "⌘[ / ⌘]", what: "Back and forward through the trail" },
   { keys: "⌘-click", what: "Open a row in a tab of its own" },
+  { keys: "⌘+ / ⌘−", what: "Make the interface larger or smaller" },
+  { keys: "⌘0", what: "Back to the standard size" },
   { keys: "Esc", what: "Close the palette, or go back" },
   { keys: "?", what: "Show this list" },
 ];
