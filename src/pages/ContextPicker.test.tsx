@@ -35,7 +35,13 @@ const setContextPinned = vi.mocked(api.setContextPinned);
 const connectedClusters = vi.mocked(api.connectedClusters);
 
 function settings(over: Partial<import("../lib/api").Settings> = {}) {
-  return { theme: "system" as const, recentContexts: [], pinnedContexts: [], ...over };
+  return {
+    theme: "system" as const,
+    recentContexts: [],
+    pinnedContexts: [],
+    zoom: 1,
+    ...over,
+  };
 }
 
 function context(name: string, overrides: Partial<ContextInfo> = {}): ContextInfo {

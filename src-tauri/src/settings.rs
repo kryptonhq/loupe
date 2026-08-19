@@ -36,7 +36,7 @@ pub enum Theme {
 /// second copy of the kubeconfig.
 const MAX_RECENT: usize = 8;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub theme: Theme,
@@ -61,6 +61,48 @@ pub struct Settings {
     /// Glob patterns marking contexts protected without naming each one
     /// — `*prod*` covers six hundred clusters in one line.
     pub protected_patterns: Vec<String>,
+
+    /// Interface scale, where 1.0 is the size the app is drawn at.
+    ///
+    /// An accessibility setting, so it is stored rather than reset each
+    /// launch: someone who needs 150% needs it every time, and having to
+    /// say so at every start is the same as not having the control.
+    #[serde(default = "default_zoom")]
+    pub zoom: f64,
+}
+
+/// Serde needs a function for a non-zero default, and `Default` for the
+/// struct as a whole has to agree with it.
+fn default_zoom() -> f64 {
+    1.0
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            recent_contexts: Vec::new(),
+            pinned_contexts: Vec::new(),
+            read_only_contexts: Vec::new(),
+            protected_contexts: Vec::new(),
+            protected_patterns: Vec::new(),
+            zoom: default_zoom(),
+        }
+    }
+}
+
+/// What the app will render at. Anything outside this is a settings file
+/// that has been edited by hand, and is clamped rather than obeyed — a
+/// window drawn at 20x has no way back to the control that fixes it.
+const MIN_ZOOM: f64 = 0.75;
+const MAX_ZOOM: f64 = 2.0;
+
+/// Bring a stored or requested scale into range.
+pub fn clamp_zoom(zoom: f64) -> f64 {
+    if !zoom.is_finite() {
+        return 1.0;
+    }
+    zoom.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
 impl Settings {
@@ -191,6 +233,36 @@ mod tests {
         assert_eq!(json["theme"], "dark");
         assert_eq!(json["recentContexts"], serde_json::json!([]));
         assert_eq!(json["pinnedContexts"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn zoom_defaults_to_the_size_the_app_is_drawn_at() {
+        assert_eq!(Settings::default().zoom, 1.0);
+        assert_eq!(
+            serde_json::to_value(Settings::default()).unwrap()["zoom"],
+            1.0
+        );
+    }
+
+    #[test]
+    fn a_settings_file_written_before_zoom_existed_reads_at_full_size() {
+        // Rather than at 0, which is what a bare numeric default would
+        // give and which would render the window to nothing.
+        let settings: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(settings.zoom, 1.0);
+    }
+
+    #[test]
+    fn a_hand_edited_zoom_is_clamped_rather_than_obeyed() {
+        // A window drawn at twenty times its size has no way back to the
+        // control that would fix it.
+        assert_eq!(clamp_zoom(20.0), 2.0);
+        assert_eq!(clamp_zoom(0.01), 0.75);
+        assert_eq!(clamp_zoom(-1.0), 0.75);
+        assert_eq!(clamp_zoom(f64::NAN), 1.0);
+        assert_eq!(clamp_zoom(f64::INFINITY), 1.0);
+        // And a sane one is left alone.
+        assert_eq!(clamp_zoom(1.25), 1.25);
     }
 
     #[test]

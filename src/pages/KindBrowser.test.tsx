@@ -1,13 +1,18 @@
-// Cross-kind navigation is what the Related tab is for: from a
-// Deployment you reach its ReplicaSet, from there its Pods, and from a
-// Pod the ConfigMap it mounts. The listing stays where it was.
+// One kind's listing, with the columns the API server printed.
+//
+// Following an object out of here — into its ReplicaSet, its Deployment,
+// the ConfigMap it mounts — is the workspace's job now, and is covered
+// where that lives: the mechanics in lib/workspace.test.ts, and the
+// whole trip through the UI in App.test.tsx. What is left to cover here
+// is the table.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { KindBrowser } from "./KindBrowser";
-import { api, type GvkRef, type ResourceTable } from "../lib/api";
+import { api, type ResourceTable } from "../lib/api";
 import type { KindEntry } from "../lib/kinds";
+import type { ListView } from "../lib/routes";
 
 vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
@@ -23,17 +28,16 @@ vi.mock("../lib/api", async (original) => {
       startWatch: vi.fn().mockResolvedValue(1),
       stopWatch: vi.fn().mockResolvedValue(true),
       listTable: vi.fn(),
-      getObject: vi.fn(),
       listNamespaces: vi.fn(),
-      listRelated: vi.fn(),
     },
   };
 });
 
 const listTable = vi.mocked(api.listTable);
-const getObject = vi.mocked(api.getObject);
 const listNamespaces = vi.mocked(api.listNamespaces);
-const listRelated = vi.mocked(api.listRelated);
+
+const onOpen = vi.fn();
+const onView = vi.fn();
 
 function kind(name: string): KindEntry {
   return {
@@ -65,13 +69,18 @@ function table(rowName: string): ResourceTable {
   };
 }
 
-function renderBrowser(entry: KindEntry) {
+function renderBrowser(entry: KindEntry, listView: ListView = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <KindBrowser entry={entry} />
+      <KindBrowser
+        entry={entry}
+        onOpen={onOpen}
+        view={listView}
+        onView={onView}
+      />
     </QueryClientProvider>,
   );
   return {
@@ -79,34 +88,20 @@ function renderBrowser(entry: KindEntry) {
     switchTo: (next: KindEntry) =>
       view.rerender(
         <QueryClientProvider client={client}>
-          <KindBrowser entry={next} />
+          <KindBrowser entry={next} onOpen={onOpen} view={{}} onView={onView} />
         </QueryClientProvider>,
       ),
   };
 }
 
 beforeEach(() => {
+  onOpen.mockReset();
+  onView.mockReset();
   listTable.mockReset();
-  getObject.mockReset();
   listNamespaces.mockReset();
-  listRelated.mockReset();
-  listRelated.mockResolvedValue([]);
 
   listTable.mockResolvedValue(table("mcp-hello"));
   listNamespaces.mockResolvedValue([]);
-  getObject.mockImplementation(async (resource: GvkRef, namespace, name) => ({
-    apiVersion: `${resource.group}/${resource.version}`,
-    kind: resource.kind,
-    name,
-    namespace,
-    age: "65d",
-    status: "Ready",
-    labels: [],
-    annotations: [],
-    conditions: [],
-    editable: true,
-    yaml: `kind: ${resource.kind}\n`,
-  }));
 });
 
 describe("KindBrowser", () => {
@@ -126,6 +121,12 @@ describe("KindBrowser", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("checkbox", { name: /wide/i }));
+    expect(onView).toHaveBeenCalledWith({ wide: true });
+  });
+
+  it("shows the wide columns when the view asks for them", async () => {
+    renderBrowser(AGENT, { wide: true });
+    await screen.findByText("mcp-hello");
     expect(
       screen.getByRole("columnheader", { name: "Selector" }),
     ).toBeInTheDocument();
@@ -141,33 +142,30 @@ describe("KindBrowser", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens an object from the listing", async () => {
+  it("reports the row it was told to open", async () => {
     const { user } = renderBrowser(AGENT);
     await user.click(await screen.findByText("mcp-hello"));
 
-    await waitFor(() => expect(getObject).toHaveBeenCalled());
-    expect(getObject.mock.calls[0][0].kind).toBe("Agent");
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "mcp-hello", namespace: "agents" }),
+        "here",
+      ),
+    );
   });
 
-  it("drops the open object when the kind changes underneath it", async () => {
-    // An Agent named mcp-hello is not a Model named mcp-hello. Carrying
-    // the selection across sends the detail view after an object that
-    // does not exist, and the pane renders a 404.
-    const { user, switchTo } = renderBrowser(AGENT);
-    await user.click(await screen.findByText("mcp-hello"));
-    await waitFor(() => expect(getObject).toHaveBeenCalled());
+  it("shows the new kind's own rows when the kind changes underneath it", async () => {
+    // An Agent named mcp-hello is not a Model named mcp-hello, and a
+    // listing that carried the old rows across would be showing one
+    // kind's objects under another's heading.
+    const { switchTo } = renderBrowser(AGENT);
+    await screen.findByText("mcp-hello");
 
     listTable.mockResolvedValue(table("qwen2-0-5b"));
     switchTo(MODEL);
 
-    // Back to a listing, showing the new kind's own objects.
     expect(await screen.findByText("qwen2-0-5b")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Back to/ }),
-    ).not.toBeInTheDocument();
-    expect(
-      getObject.mock.calls.some(([resource]) => resource.kind === "Model"),
-    ).toBe(false);
+    expect(screen.queryByText("mcp-hello")).not.toBeInTheDocument();
   });
 
   it("asks for one page rather than the whole cluster", async () => {
@@ -211,65 +209,5 @@ describe("KindBrowser", () => {
     expect(await screen.findByText("second-page-agent")).toBeInTheDocument();
     // The first page is still there; pages accumulate rather than replace.
     expect(screen.getByText("first-page-agent")).toBeInTheDocument();
-  });
-
-  it("follows a related object into a different kind", async () => {
-    // The whole point of the Related tab. The listing stays on Agents;
-    // the detail view moves to the ConfigMap.
-    listRelated.mockResolvedValue([
-      {
-        relation: "uses",
-        group: "",
-        version: "v1",
-        kind: "ConfigMap",
-        name: "agent-config",
-        namespace: "agents",
-        reachable: true,
-        detail: "volume config",
-      },
-    ]);
-
-    const { user } = renderBrowser(AGENT);
-    await user.click(await screen.findByText("mcp-hello"));
-    await waitFor(() => expect(getObject).toHaveBeenCalled());
-
-    await user.click(await screen.findByRole("button", { name: "Related" }));
-    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
-
-    await waitFor(() =>
-      expect(
-        getObject.mock.calls.some(([resource]) => resource.kind === "ConfigMap"),
-      ).toBe(true),
-    );
-  });
-
-  it("goes back to where it was followed from, not to the listing", async () => {
-    // Following a chain and then closing should retrace it, or the back
-    // button loses everything you navigated through.
-    listRelated.mockResolvedValue([
-      {
-        relation: "uses",
-        group: "",
-        version: "v1",
-        kind: "ConfigMap",
-        name: "agent-config",
-        namespace: "agents",
-        reachable: true,
-        detail: null,
-      },
-    ]);
-
-    const { user } = renderBrowser(AGENT);
-    await user.click(await screen.findByText("mcp-hello"));
-    await user.click(await screen.findByRole("button", { name: "Related" }));
-    await user.click(await screen.findByRole("button", { name: /agent-config/ }));
-    await screen.findByRole("button", { name: "Back to mcp-hello" });
-
-    await user.click(screen.getByRole("button", { name: "Back to mcp-hello" }));
-
-    // Back at the Agent, not at the Agents listing.
-    expect(
-      await screen.findByRole("button", { name: "Back to agent" }),
-    ).toBeInTheDocument();
   });
 });

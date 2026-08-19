@@ -15,9 +15,29 @@ interface Row {
 }
 
 const COLUMNS: Column<Row>[] = [
-  { key: "name", header: "Name", render: (r) => r.name },
-  { key: "phase", header: "Phase", render: (r) => r.phase, mono: true },
+  { key: "name", header: "Name", render: (r) => r.name, sortValue: (r) => r.name },
+  {
+    key: "phase",
+    header: "Phase",
+    render: (r) => r.phase,
+    mono: true,
+    sortValue: (r) => r.phase,
+  },
 ];
+
+/// A column with no `sortValue`, which is how a view says "this one
+/// cannot be sorted" — a cell of chips has no order to speak of.
+const UNSORTABLE: Column<Row>[] = [
+  { key: "name", header: "Name", render: (r) => r.name },
+];
+
+/// The names in the body, top to bottom.
+function names() {
+  return screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelectorAll("td")[0].textContent);
+}
 
 function rows(count: number, phase = "Running"): Row[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -157,6 +177,127 @@ describe("ResourceTable search", () => {
   });
 });
 
+describe("ResourceTable sorting", () => {
+  const UNSORTED: Row[] = [
+    { name: "pod-b", phase: "Running" },
+    { name: "pod-c", phase: "Failed" },
+    { name: "pod-a", phase: "Pending" },
+  ];
+
+  it("leaves the rows in the server's order until asked", () => {
+    // That order is what `kubectl get` prints, so it is a real answer
+    // rather than an arbitrary starting point.
+    renderTable({ rows: UNSORTED });
+    expect(names()).toEqual(["pod-b", "pod-c", "pod-a"]);
+  });
+
+  it("sorts ascending on the first click", async () => {
+    const user = renderTable({ rows: UNSORTED });
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    expect(names()).toEqual(["pod-a", "pod-b", "pod-c"]);
+  });
+
+  it("reverses on the second, and returns to the server's order on the third", async () => {
+    const user = renderTable({ rows: UNSORTED });
+    const header = screen.getByRole("button", { name: /Name/ });
+
+    await user.click(header);
+    await user.click(header);
+    expect(names()).toEqual(["pod-c", "pod-b", "pod-a"]);
+
+    await user.click(header);
+    expect(names()).toEqual(["pod-b", "pod-c", "pod-a"]);
+  });
+
+  it("starts the new column ascending when a different header is clicked", async () => {
+    const user = renderTable({ rows: UNSORTED });
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    await user.click(screen.getByRole("button", { name: /Phase/ }));
+
+    expect(names()).toEqual(["pod-c", "pod-a", "pod-b"]);
+  });
+
+  it("says which column is sorted, and which way", async () => {
+    const user = renderTable({ rows: UNSORTED });
+    const name = () => screen.getByRole("columnheader", { name: /Name/ });
+    expect(name()).toHaveAttribute("aria-sort", "none");
+
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    expect(name()).toHaveAttribute("aria-sort", "ascending");
+
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    expect(name()).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("leaves a column with nothing to sort by inert", () => {
+    // A cell of chips has no order to speak of, and a header that looks
+    // clickable but does nothing is worse than one that does not.
+    renderTable({ columns: UNSORTABLE });
+    expect(
+      screen.queryByRole("button", { name: /Name/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveAttribute(
+      "aria-sort",
+    );
+  });
+
+  it("sorts the whole set rather than the page on screen", async () => {
+    // Sorting only the visible page would put the smallest of the first
+    // fifty at the top and call it the smallest.
+    const user = renderTable({ rows: rows(120) });
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+
+    expect(names()[0]).toBe("pod-119");
+  });
+
+  it("returns to the first page, where the rows now are", async () => {
+    const user = renderTable({ rows: rows(120) });
+    await user.click(screen.getByRole("button", { name: "›" }));
+    expect(screen.getByText("2 / 3")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+    expect(screen.getByText("1 / 3")).toBeInTheDocument();
+  });
+
+  it("sorts within a search rather than across everything", async () => {
+    const user = renderTable({
+      rows: [
+        { name: "kube-b", phase: "Running" },
+        { name: "app", phase: "Running" },
+        { name: "kube-a", phase: "Running" },
+      ],
+    });
+    await user.type(screen.getByPlaceholderText("Search…"), "kube");
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+
+    expect(names()).toEqual(["kube-a", "kube-b"]);
+  });
+
+  it("warns that a sort only covered what is loaded", async () => {
+    // A sort hides a partial listing better than a search does: the rows
+    // come back convincingly ordered with the real top of the list still
+    // sitting on the server.
+    const user = renderTable({ hasMore: true, remaining: 19_500 });
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+
+    expect(
+      screen.getByText(/the sort covers only what is loaded/),
+    ).toBeInTheDocument();
+  });
+
+  it("names both when a search and a sort are in play", async () => {
+    const user = renderTable({ hasMore: true, remaining: 19_500 });
+    await user.type(screen.getByPlaceholderText("Search…"), "pod");
+    await user.click(screen.getByRole("button", { name: /Name/ }));
+
+    expect(
+      screen.getByText(/search and sort cover only what is loaded/),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("ResourceTable pagination", () => {
   it("stays on one page for a set that fits", () => {
     renderTable({ rows: rows(50) });
@@ -233,7 +374,31 @@ describe("Table rows", () => {
     );
 
     await user.click(screen.getByText("pod-000"));
-    expect(onRowClick).toHaveBeenCalledWith({ name: "pod-000", phase: "Running" });
+    expect(onRowClick).toHaveBeenCalledWith(
+      { name: "pod-000", phase: "Running" },
+      "here",
+    );
+  });
+
+  it("asks for a new tab when a row is clicked with the modifier held", async () => {
+    // The row reports how it was opened and lets the caller decide what
+    // that means, the same way a link does.
+    const onRowClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Table
+        columns={COLUMNS}
+        rows={rows(1)}
+        rowKey={(r) => r.name}
+        onRowClick={onRowClick}
+      />,
+    );
+
+    await user.keyboard("{Meta>}");
+    await user.click(screen.getByText("pod-000"));
+    await user.keyboard("{/Meta}");
+
+    expect(onRowClick).toHaveBeenCalledWith(expect.anything(), "newTab");
   });
 
   it("opens a row from the keyboard", async () => {

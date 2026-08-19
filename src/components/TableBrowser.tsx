@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Panel } from "./Panel";
 import { ResourceTable } from "./ResourceTable";
@@ -6,6 +6,7 @@ import { type Column } from "./Table";
 import { Select } from "./Select";
 import { StatusDot } from "./StatusDot";
 import { api, type GvkRef, type TableRow } from "../lib/api";
+import type { ListView, OpenIntent } from "../lib/routes";
 import { useWatch } from "../lib/useWatch";
 import { statusTone } from "../pages/ObjectDetail";
 
@@ -41,9 +42,13 @@ interface TableBrowserProps {
   title: string;
   /// Rendered under the title — the API group, usually.
   subtitle?: string;
-  onOpen: (row: TableRow) => void;
+  onOpen: (row: TableRow, intent: OpenIntent) => void;
   /// Extra controls for the panel header.
   actions?: React.ReactNode;
+  /// How this listing is presented, held by the caller so it survives
+  /// opening a row and coming back.
+  view: ListView;
+  onView: (patch: Partial<ListView>) => void;
 }
 
 export function TableBrowser({
@@ -52,12 +57,16 @@ export function TableBrowser({
   subtitle,
   onOpen,
   actions,
+  view,
+  onView,
 }: TableBrowserProps) {
-  const [namespace, setNamespace] = useState("");
+  const namespace = view.namespace ?? "";
+  const setNamespace = (next: string) => onView({ namespace: next });
   // Kubectl calls these `-o wide`. Off by default for the same reason:
   // Selector and Images columns are long enough to squeeze everything
   // else off a narrow pane.
-  const [wide, setWide] = useState(false);
+  const wide = view.wide ?? false;
+  const setWide = (next: boolean) => onView({ wide: next });
 
   // Fetched a page at a time. Asking for everything meant a busy cluster
   // pulled 20,000 objects across the IPC boundary before the first fifty
@@ -99,7 +108,7 @@ export function TableBrowser({
       .map((column, index) => ({ column, index }))
       .filter(({ column }) => wide || column.priority === 0);
 
-    const cells = visible.map(({ column, index }) => {
+    const cells: Column<TableRow>[] = visible.map(({ column, index }) => {
       const status = STATUS_COLUMNS.has(column.name.toLowerCase());
       return {
         key: `${index}`,
@@ -118,6 +127,12 @@ export function TableBrowser({
           );
         },
         mono: !status && /age|ports?|ip|capacity|size|version/i.test(column.name),
+        // The raw cell, not the rendered one. Every value here is a
+        // string the server printed, so the comparator does the reading:
+        // an AGE of "65d" against "10m", a READY of "0/1" against "1/1",
+        // a RESTARTS of "12" against "2" all order by what they mean
+        // rather than by how they happen to spell it.
+        sortValue: (row: TableRow) => row.cells[index],
       } satisfies Column<TableRow>;
     });
 
@@ -129,6 +144,7 @@ export function TableBrowser({
         header: "Namespace",
         render: (row: TableRow) => row.namespace ?? "—",
         mono: false,
+        sortValue: (row: TableRow) => row.namespace,
       });
     }
     return cells;
@@ -174,10 +190,16 @@ export function TableBrowser({
         remaining={lastPage?.remaining ?? null}
         loadingMore={q.isFetchingNextPage}
         onLoadMore={() => q.fetchNextPage()}
+        view={view}
+        onView={onView}
         toolbar={
           <>
             {table?.namespaced && (
-              <Select value={namespace} onChange={setNamespace}>
+              <Select
+                title="Namespace"
+                value={namespace}
+                onChange={setNamespace}
+              >
                 <option value="">All namespaces</option>
                 {(namespaces.data ?? []).map((ns) => (
                   <option key={ns.name} value={ns.name}>

@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Sidebar } from "./Sidebar";
-import { api, type ApiResourceInfo, type ClusterInfo } from "../lib/api";
+import { api, type ApiResourceInfo } from "../lib/api";
 
 vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
@@ -36,72 +36,26 @@ const CRDS = [
   resource("", "Pod", false),
 ];
 
-const CLUSTER: ClusterInfo = {
-  context: "orbstack",
-  server: "https://127.0.0.1:26443",
-  version: "v1.34.8",
-  platform: "darwin/arm64",
-};
-
 function setup({
-  cluster = CLUSTER as ClusterInfo | null,
-  view = { type: "nodes" } as Parameters<typeof Sidebar>[0]["view"],
-  guard = "open" as Parameters<typeof Sidebar>[0]["guard"],
+  route = { type: "nodes" } as Parameters<typeof Sidebar>[0]["route"],
 } = {}) {
   listApiResources.mockResolvedValue(CRDS);
   const onSelect = vi.fn();
-  const onGuardChange = vi.fn();
 
   render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <Sidebar
-        cluster={cluster}
-        view={view}
+        route={route}
         onSelect={onSelect}
         theme="system"
         onThemeChange={vi.fn()}
-        guard={guard}
-        onGuardChange={onGuardChange}
-        onSwitchCluster={vi.fn()}
-        onDisconnect={vi.fn()}
       />
     </QueryClientProvider>,
   );
-  return { onSelect, onGuardChange, user: userEvent.setup() };
+  return { onSelect, user: userEvent.setup() };
 }
-
-// The guard is only worth having if it is visible. These assert that a
-// marked cluster is legible from the rail — including in a screenshot,
-// which is where most people will first see that this exists.
-describe("Sidebar guard", () => {
-  it("says nothing extra about an ordinary cluster", () => {
-    setup({ guard: "open" });
-    expect(screen.queryByText("Read-only")).not.toBeInTheDocument();
-    expect(screen.queryByText("Protected")).not.toBeInTheDocument();
-  });
-
-  it("marks a read-only cluster where the version usually sits", () => {
-    setup({ guard: "readOnly" });
-    expect(screen.getByText("Read-only")).toBeInTheDocument();
-  });
-
-  it("marks a protected cluster", () => {
-    setup({ guard: "protected" });
-    expect(screen.getByText("Protected")).toBeInTheDocument();
-  });
-
-  it("changes the guard from the rail", async () => {
-    const { user, onGuardChange } = setup({ guard: "open" });
-
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: /What this context allows/ }),
-      "readOnly",
-    );
-    expect(onGuardChange).toHaveBeenCalledWith("readOnly");
-  });
-});
 
 beforeEach(() => {
   listApiResources.mockReset();
@@ -129,7 +83,7 @@ describe("Sidebar CRDs section", () => {
     expect(screen.getByText("monitoring.coreos.com")).toBeInTheDocument();
   });
 
-  it("selects a kind and switches the view to it", async () => {
+  it("selects a kind and navigates to it", async () => {
     const { user, onSelect } = setup();
     await screen.findByText("3");
     await user.click(screen.getByRole("button", { name: "Expand CRDs" }));
@@ -151,7 +105,7 @@ describe("Sidebar CRDs section", () => {
     // Reaching a CRD from the index table should not leave the rail
     // shut over the thing that is on screen.
     setup({
-      view: {
+      route: {
         type: "kind",
         entry: { id: "krypton.ai/v1/Agent", label: "Agent", gvk: CRDS[0] },
       },
@@ -173,7 +127,7 @@ describe("Sidebar CRDs section", () => {
     expect(screen.getByText("Storage")).toBeInTheDocument();
   });
 
-  it("reports a fixed kind as a kind view", async () => {
+  it("reports a fixed kind as a kind route", async () => {
     const { user, onSelect } = setup();
     await user.click(screen.getByRole("button", { name: "Services" }));
     expect(onSelect).toHaveBeenCalledWith({
@@ -182,13 +136,7 @@ describe("Sidebar CRDs section", () => {
     });
   });
 
-  it("does not reach for the cluster before there is one", () => {
-    setup({ cluster: null });
-    expect(listApiResources).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /^CRDs/ })).toBeDisabled();
-  });
-
-  it("collapses again without changing the view", async () => {
+  it("collapses again without navigating", async () => {
     const { user, onSelect } = setup();
     await screen.findByText("3");
 

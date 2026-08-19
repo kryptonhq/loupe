@@ -314,6 +314,8 @@ export interface RelatedObject {
 /// survive a cache clear and be a file the user can read or delete.
 export interface Settings {
   theme: Theme;
+  /// Interface scale, where 1 is the size the app is drawn at.
+  zoom: number;
   /// Contexts connected to, most recent first. Recorded by the backend
   /// on a successful connect.
   recentContexts: string[];
@@ -655,6 +657,9 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setTheme: (theme: Theme) => invoke<Settings>("set_theme", { theme }),
+  /// Records the interface scale. Clamped by the backend, so a caller
+  /// cannot store a size the app has no way back from.
+  setZoom: (zoom: number) => invoke<Settings>("set_zoom", { zoom }),
   /// Pins or unpins a context in the picker, returning the settings as
   /// stored.
   setContextPinned: (context: string, pinned: boolean) =>

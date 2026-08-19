@@ -1,23 +1,75 @@
 import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CommandPalette } from "./components/CommandPalette";
 import { ShortcutSheet } from "./components/ShortcutSheet";
+import { StatusBar } from "./components/StatusBar";
+import { TabStrip } from "./components/TabStrip";
+import { TrailBar } from "./components/TrailBar";
 import { KIND_SECTIONS } from "./lib/kinds";
 import type { Command } from "./lib/palette";
-import { Sidebar, type View } from "./components/Sidebar";
+import { Sidebar } from "./components/Sidebar";
 import { SkeletonBlock } from "./components/Skeleton";
 import { ContextPicker } from "./pages/ContextPicker";
 import { Namespaces, Nodes, Pods } from "./pages/Resources";
+import { NodeDetail } from "./pages/NodeDetail";
+import { NamespaceDetail } from "./pages/NamespaceDetail";
+import { PodDetail } from "./pages/PodDetail";
+import { ObjectDetail } from "./pages/ObjectDetail";
 import { Crds } from "./pages/Crds";
 import { KindBrowser } from "./pages/KindBrowser";
-import { Helm } from "./pages/Helm";
+import { Helm, ReleaseDetail } from "./pages/Helm";
 import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
+import {
+  applyZoom,
+  clampZoom,
+  DEFAULT_ZOOM,
+  ZOOM_EVENT,
+  ZOOM_IN,
+  ZOOM_OUT,
+  ZOOM_RESET,
+  zoomIn,
+  zoomOut,
+} from "./lib/zoom";
+import {
+  crumbsFor,
+  listViewOf,
+  parentOf,
+  routeKey,
+  withListView,
+  type ListView,
+  type OpenIntent,
+  type Route,
+} from "./lib/routes";
+import {
+  activeTab,
+  canGoBack,
+  canGoForward,
+  closeActiveTab,
+  closeTab,
+  currentRoute,
+  goBack,
+  goForward,
+  navigate,
+  newWorkspace,
+  openInNewTab,
+  replace,
+  selectIndex,
+  selectTab,
+  type Workspace,
+} from "./lib/workspace";
 
 export default function App() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
-  const [view, setView] = useState<View>({ type: "nodes" });
+
+  // Where the window is, in full: which tabs are open, what each has
+  // shown, and which one is on screen. Every navigation in the app ends
+  // up here, which is what makes back, forward and the trail work the
+  // same way regardless of what did the navigating.
+  const [workspace, setWorkspace] = useState<Workspace>(() => newWorkspace());
+
   // Shown over a live connection when the user wants a different
   // cluster, so switching does not require disconnecting first.
   const [switching, setSwitching] = useState(false);
@@ -28,6 +80,11 @@ export default function App() {
   // App owns the appearance: the picker sets it, the OS feeds into it
   // when the preference is "system", and one effect applies the result.
   const [theme, setTheme] = useState<Theme>("system");
+
+  // Interface scale. Stored rather than reset each launch, because
+  // someone who needs 150% needs it every time — a size you have to
+  // re-ask for at every start is the same as not having the control.
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
 
   // What the connected context allows. Held here because every write
   // path needs it and none of the pages in between should have to carry
@@ -40,13 +97,70 @@ export default function App() {
 
   const queryClient = useQueryClient();
 
+  const tab = activeTab(workspace);
+  const route = currentRoute(workspace);
+  const crumbs = crumbsFor(route);
+
+  /// Go somewhere. `intent` is how the click asked to be handled — this
+  /// tab, or one of its own — and is what makes ⌘-clicking a row fan a
+  /// listing out into tabs.
+  function open(next: Route, intent: OpenIntent = "here") {
+    setWorkspace((ws) =>
+      intent === "newTab"
+        ? openInNewTab(ws, next, currentRoute(ws))
+        : navigate(ws, next),
+    );
+  }
+
+  /// Go somewhere from outside a listing — the palette, mostly, where
+  /// there is no current view for the destination to have come from. A
+  /// detail route is seeded with its listing so the trail is not empty
+  /// on arrival.
+  function jump(next: Route) {
+    setWorkspace((ws) => {
+      const under = parentOf(next);
+      return under ? openInNewTab(ws, next, under) : navigate(ws, next);
+    });
+  }
+
+  /// Change how the listing on screen is presented — its namespace, its
+  /// search text, its sort. Replaces rather than pushes: this is the
+  /// same destination shown differently, and pushing would make back
+  /// mean "undo my last keystroke".
+  function changeView(patch: Partial<ListView>) {
+    setWorkspace((ws) => replace(ws, withListView(currentRoute(ws), patch)));
+  }
+
+  const back = () => setWorkspace(goBack);
+
   useEffect(() => {
     api
       .getSettings()
-      .then((s) => setTheme(parseTheme(s.theme)))
+      .then((s) => {
+        setTheme(parseTheme(s.theme));
+        setZoom(clampZoom(s.zoom));
+      })
       // No settings file yet, or no bridge in browser dev. Following the
-      // system is the right fallback either way.
+      // system at the default size is the right fallback either way.
       .catch(() => {});
+  }, []);
+
+  useEffect(() => applyZoom(zoom), [zoom]);
+
+  // The menu says what was asked for and this decides what it means, so
+  // the menu item and the keystroke cannot drift apart.
+  useEffect(() => {
+    // Caught here rather than on the way out: without a bridge this
+    // rejects immediately, and a rejection only handled at cleanup is
+    // unhandled for as long as the app is mounted — which is the whole
+    // session, and every test that renders it.
+    const unlisten = listen<string>(ZOOM_EVENT, (event) => {
+      if (event.payload === ZOOM_IN) changeZoom(zoomIn);
+      else if (event.payload === ZOOM_OUT) changeZoom(zoomOut);
+      else if (event.payload === ZOOM_RESET) changeZoom(() => DEFAULT_ZOOM);
+    }).catch(() => null);
+    return () => void unlisten.then((off) => off?.());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -91,14 +205,14 @@ export default function App() {
   const commands: Command[] = useMemo(() => {
     const out: Command[] = [];
 
-    const goTo = (label: string, view: View, hint?: string, keywords?: string) =>
+    const goTo = (label: string, to: Route, hint?: string, keywords?: string) =>
       out.push({
         id: `view:${label}`,
         group: "Go to",
         label,
         hint,
         keywords,
-        run: () => setView(view),
+        run: () => jump(to),
       });
 
     goTo("Nodes", { type: "nodes" });
@@ -130,7 +244,7 @@ export default function App() {
         group: "Go to",
         label: resource.kind,
         hint: resource.group,
-        run: () => setView({ type: "kind", entry }),
+        run: () => jump({ type: "kind", entry }),
       });
     }
 
@@ -158,6 +272,20 @@ export default function App() {
     }
 
     out.push({
+      id: "action:new-tab",
+      group: "Action",
+      label: "New tab",
+      keywords: "open split",
+      run: () =>
+        setWorkspace((ws) => openInNewTab(ws, currentRoute(ws))),
+    });
+    out.push({
+      id: "action:close-tab",
+      group: "Action",
+      label: "Close tab",
+      run: () => setWorkspace(closeActiveTab),
+    });
+    out.push({
       id: "action:switch",
       group: "Action",
       label: "Switch cluster…",
@@ -169,6 +297,30 @@ export default function App() {
       group: "Action",
       label: "Disconnect",
       run: () => void disconnect(),
+    });
+    // Reachable without the menu, which is macOS-only, and without the
+    // keystroke, which is the thing someone who needs this may be least
+    // able to discover.
+    out.push({
+      id: "action:zoom-in",
+      group: "Action",
+      label: "Zoom in",
+      keywords: "larger bigger text size accessibility",
+      run: () => changeZoom(zoomIn),
+    });
+    out.push({
+      id: "action:zoom-out",
+      group: "Action",
+      label: "Zoom out",
+      keywords: "smaller text size accessibility",
+      run: () => changeZoom(zoomOut),
+    });
+    out.push({
+      id: "action:zoom-reset",
+      group: "Action",
+      label: "Actual size",
+      keywords: "zoom reset 100%",
+      run: () => changeZoom(() => DEFAULT_ZOOM),
     });
     out.push({
       id: "action:shortcuts",
@@ -193,11 +345,62 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((open) => !open);
         return;
       }
+
+      // Tab management. Guarded on the modifier rather than on focus:
+      // these have to work while the cursor is in a filter box, which is
+      // exactly where it is when someone decides to open a second tab.
+      if (mod && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        setWorkspace((ws) => openInNewTab(ws, currentRoute(ws)));
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        setWorkspace(closeActiveTab);
+        return;
+      }
+      if (mod && (e.key === "[" || e.key === "ArrowLeft")) {
+        e.preventDefault();
+        setWorkspace(goBack);
+        return;
+      }
+      if (mod && (e.key === "]" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        setWorkspace(goForward);
+        return;
+      }
+      if (mod && e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        setWorkspace((ws) => selectIndex(ws, Number(e.key) - 1));
+        return;
+      }
+
+      // Zoom. Bound here as well as on the menu so it works on the
+      // platforms with no menu bar, and so `=` reaches it without the
+      // shift that would otherwise be needed to type `+`.
+      if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        changeZoom(zoomIn);
+        return;
+      }
+      if (mod && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        changeZoom(zoomOut);
+        return;
+      }
+      if (mod && e.key === "0") {
+        e.preventDefault();
+        changeZoom(() => DEFAULT_ZOOM);
+        return;
+      }
+
       // `?` only when not typing, or it cannot be typed into a filter.
       const target = e.target as HTMLElement | null;
       const typing =
@@ -223,6 +426,17 @@ export default function App() {
       // failed to apply, so put it back.
       await api.contextGuard(cluster.context).then(setGuard).catch(() => {});
     }
+  }
+
+  /// Step the scale and remember it. Applied first, like the theme: the
+  /// keystroke should land immediately, and a size that failed to
+  /// persist is still the one the user asked for.
+  function changeZoom(next: (level: number) => number) {
+    setZoom((level) => {
+      const to = clampZoom(next(level));
+      void api.setZoom(to).catch(() => {});
+      return to;
+    });
   }
 
   async function chooseTheme(next: Theme) {
@@ -254,6 +468,10 @@ export default function App() {
     // screen. Isolating the frontend cache per cluster would remove that
     // too, and wants a key scheme rather than a comment.
     queryClient.clear();
+    // Tabs go with it. They name objects in the cluster being left, and
+    // a tab pointing at a pod that does not exist here is worse than
+    // starting clean.
+    setWorkspace(newWorkspace());
     setCluster(await api.currentCluster());
     setSwitching(false);
   }
@@ -263,6 +481,7 @@ export default function App() {
     // Everything, because every connection is gone. A per-cluster
     // disconnect drops only that cluster's keys.
     queryClient.clear();
+    setWorkspace(newWorkspace());
     setCluster(null);
     setSwitching(false);
   }
@@ -287,28 +506,60 @@ export default function App() {
 
   return (
     <ClusterContext.Provider value={{ context: cluster.context, guard }}>
-      <div className="ambient flex h-full">
-        <Sidebar
+      <div className="ambient flex h-full flex-col">
+        <div className="flex min-h-0 flex-1">
+          <Sidebar
+            route={route}
+            onSelect={open}
+            theme={theme}
+            onThemeChange={chooseTheme}
+          />
+
+          <main className="flex min-w-0 flex-1 flex-col">
+            <TabStrip
+              tabs={workspace.tabs}
+              active={workspace.active}
+              onSelect={(id) => setWorkspace((ws) => selectTab(ws, id))}
+              onClose={(id) => setWorkspace((ws) => closeTab(ws, id))}
+              onNew={() =>
+                setWorkspace((ws) => openInNewTab(ws, currentRoute(ws)))
+              }
+            />
+
+            {/* Shown when it has something to say: an object sitting
+                somewhere, or a history worth stepping through. On a
+                listing opened fresh it is one crumb repeating the
+                heading below it and two dead arrows — chrome paying no
+                rent. */}
+            {(crumbs.length > 1 || canGoBack(tab) || canGoForward(tab)) && (
+              <TrailBar
+                crumbs={crumbs}
+                canBack={canGoBack(tab)}
+                canForward={canGoForward(tab)}
+                onBack={back}
+                onForward={() => setWorkspace(goForward)}
+                onCrumb={(to) => open(to)}
+              />
+            )}
+
+            <div className="min-h-0 flex-1">
+              <View
+                route={route}
+                open={open}
+                back={back}
+                onView={changeView}
+              />
+            </div>
+          </main>
+        </div>
+
+        <StatusBar
           cluster={cluster}
-          view={view}
-          onSelect={setView}
-          theme={theme}
-          onThemeChange={chooseTheme}
           guard={guard}
           onGuardChange={chooseGuard}
           onSwitchCluster={() => setSwitching(true)}
           onDisconnect={disconnect}
         />
-        <main className="min-w-0 flex-1">
-          {view.type === "nodes" && <Nodes />}
-          {view.type === "namespaces" && <Namespaces />}
-          {view.type === "pods" && <Pods />}
-          {view.type === "crds" && (
-            <Crds onSelectKind={(entry) => setView({ type: "kind", entry })} />
-          )}
-          {view.type === "kind" && <KindBrowser entry={view.entry} />}
-          {view.type === "helm" && <Helm />}
-        </main>
 
         {paletteOpen && (
           <CommandPalette
@@ -322,4 +573,150 @@ export default function App() {
       </div>
     </ClusterContext.Provider>
   );
+}
+
+/// One route, rendered.
+///
+/// Every page here is either a listing that reports what was opened, or
+/// a detail view that reports where it wants to go next. None of them
+/// decides what happens as a result — that is the workspace's, which is
+/// why the same pod row can open in this tab or a new one without the
+/// pod list knowing either exists.
+function View({
+  route,
+  open,
+  back,
+  onView,
+}: {
+  route: Route;
+  open: (route: Route, intent?: OpenIntent) => void;
+  back: () => void;
+  onView: (patch: Partial<ListView>) => void;
+}) {
+  const view = listViewOf(route);
+
+  switch (route.type) {
+    case "nodes":
+      return (
+        <Nodes
+          onOpen={(n, i) => open({ type: "node", name: n.name }, i)}
+          view={view}
+          onView={onView}
+        />
+      );
+
+    case "namespaces":
+      return (
+        <Namespaces
+          onOpen={(n, i) => open({ type: "namespace", name: n.name }, i)}
+          view={view}
+          onView={onView}
+        />
+      );
+
+    case "pods":
+      return (
+        <Pods
+          onOpen={(p, i) =>
+            open({ type: "pod", namespace: p.namespace, name: p.name }, i)
+          }
+          view={view}
+          onView={onView}
+        />
+      );
+
+    case "crds":
+      return <Crds onSelectKind={(entry) => open({ type: "kind", entry })} />;
+
+    case "helm":
+      return (
+        <Helm
+          onOpen={(r, i) =>
+            open({ type: "release", namespace: r.namespace, name: r.name }, i)
+          }
+          view={view}
+          onView={onView}
+        />
+      );
+
+    case "kind":
+      return (
+        <KindBrowser
+          entry={route.entry}
+          onOpen={(row, i) =>
+            open(
+              {
+                type: "object",
+                resource: route.entry.gvk,
+                namespace: row.namespace,
+                name: row.name,
+              },
+              i,
+            )
+          }
+          view={view}
+          onView={onView}
+        />
+      );
+
+    case "node":
+      return <NodeDetail key={route.name} name={route.name} onClose={back} />;
+
+    case "namespace":
+      return (
+        <NamespaceDetail
+          key={route.name}
+          name={route.name}
+          onClose={back}
+          onOpenPod={(pod) =>
+            open({ type: "pod", namespace: pod.namespace, name: pod.name })
+          }
+        />
+      );
+
+    case "pod":
+      return (
+        <PodDetail
+          key={routeKey(route)}
+          namespace={route.namespace}
+          name={route.name}
+          onClose={back}
+        />
+      );
+
+    case "release":
+      return (
+        <ReleaseDetail
+          key={routeKey(route)}
+          namespace={route.namespace}
+          name={route.name}
+          onClose={back}
+        />
+      );
+
+    case "object":
+      return (
+        <ObjectDetail
+          // Keyed so following a related object remounts rather than
+          // showing the previous object's tab state over the new one.
+          key={routeKey(route)}
+          resource={route.resource}
+          namespace={route.namespace}
+          name={route.name}
+          onClose={back}
+          onOpenRelated={(related) =>
+            open({
+              type: "object",
+              resource: {
+                group: related.group,
+                version: related.version,
+                kind: related.kind,
+              },
+              namespace: related.namespace,
+              name: related.name,
+            })
+          }
+        />
+      );
+  }
 }

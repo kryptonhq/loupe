@@ -71,7 +71,6 @@ interface ObjectDetailProps {
   namespace: string | null;
   name: string;
   onClose: () => void;
-  backTo?: string;
   /// Opens another object from the Related tab. Without it the tab is a
   /// list you cannot follow, which is most of the point gone, so the
   /// tab is only offered when a caller can navigate.
@@ -83,7 +82,6 @@ export function ObjectDetail({
   namespace,
   name,
   onClose,
-  backTo,
   onOpenRelated,
 }: ObjectDetailProps) {
   const [tab, setTab] = useState("overview");
@@ -144,7 +142,6 @@ export function ObjectDetail({
       tab={tab}
       onTab={setTab}
       onClose={onClose}
-      backTo={backTo}
       error={q.error}
       actions={
         object && (

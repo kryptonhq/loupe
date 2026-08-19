@@ -135,7 +135,6 @@ export function NodeDetail({ name, onClose }: NodeDetailProps) {
       tab={tab}
       onTab={setTab}
       onClose={onClose}
-      backTo="nodes"
       error={q.error}
       actions={
         node && (

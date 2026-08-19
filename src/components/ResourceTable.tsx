@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Table, type Column } from "./Table";
 import { SkeletonRows } from "./Skeleton";
+import type { ListView, OpenIntent } from "../lib/routes";
+import { nextSort, sortRows, type SortState } from "../lib/sort";
 
 const PAGE_SIZE = 50;
 
@@ -13,7 +15,7 @@ export interface ResourceTableProps<T> {
   searchText: (row: T) => string;
   isLoading: boolean;
   empty?: string;
-  onRowClick?: (row: T) => void;
+  onRowClick?: (row: T, intent: OpenIntent) => void;
   /// Extra controls rendered to the left of the search box.
   toolbar?: ReactNode;
   /// True when the cluster holds more objects than have been fetched.
@@ -25,6 +27,16 @@ export interface ResourceTableProps<T> {
   remaining?: number | null;
   loadingMore?: boolean;
   onLoadMore?: () => void;
+  /// The search text and sort, when the caller wants them to outlive
+  /// this component. A listing does: it unmounts the moment you open a
+  /// row, and a filter that evaporates on the way to a pod and back is
+  /// the filter you have to retype every time.
+  ///
+  /// Omitted by the small fixed tables inside a detail view, which are
+  /// gone for good when you leave and have nothing worth keeping. They
+  /// fall back to holding it themselves.
+  view?: ListView;
+  onView?: (patch: Partial<ListView>) => void;
 }
 
 export function ResourceTable<T>({
@@ -40,9 +52,25 @@ export function ResourceTable<T>({
   remaining = null,
   loadingMore = false,
   onLoadMore,
+  view,
+  onView,
 }: ResourceTableProps<T>) {
-  const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
+
+  // Held by the caller when it offered somewhere to hold it, and here
+  // otherwise. Null sort is the order the server sent, which for a
+  // Kubernetes listing is meaningful in its own right — it is what
+  // `kubectl get` prints.
+  const [ownQuery, setOwnQuery] = useState("");
+  const [ownSort, setOwnSort] = useState<SortState | null>(null);
+
+  const kept = onView != null;
+  const query = kept ? (view?.query ?? "") : ownQuery;
+  const sort = kept ? (view?.sort ?? null) : ownSort;
+  const setQuery = (next: string) =>
+    kept ? onView({ query: next }) : setOwnQuery(next);
+  const setSort = (next: SortState | null) =>
+    kept ? onView({ sort: next }) : setOwnSort(next);
 
   const filtered = useMemo(() => {
     if (!rows) return [];
@@ -57,7 +85,22 @@ export function ResourceTable<T>({
     });
   }, [rows, query, searchText]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // After filtering and before paging, so page 1 holds the first rows of
+  // the sorted set rather than the sorted first page.
+  const ordered = useMemo(() => {
+    if (!sort) return filtered;
+    const column = columns.find((c) => c.key === sort.key);
+    if (!column?.sortValue) return filtered;
+    return sortRows(filtered, column.sortValue, sort.direction);
+  }, [filtered, sort, columns]);
+
+  function chooseSort(key: string) {
+    setSort(nextSort(sort, key));
+    // The row that was on page 3 is somewhere else entirely now.
+    setPage(0);
+  }
+
+  const pageCount = Math.max(1, Math.ceil(ordered.length / PAGE_SIZE));
 
   // Filtering can strip away the page the user was on; clamp rather than
   // showing an empty table below a non-empty result count.
@@ -66,7 +109,20 @@ export function ResourceTable<T>({
   }, [page, pageCount]);
 
   const start = page * PAGE_SIZE;
-  const visible = filtered.slice(start, start + PAGE_SIZE);
+  const visible = ordered.slice(start, start + PAGE_SIZE);
+
+  // A sort over a partly loaded listing has not sorted the cluster, in
+  // exactly the way a search over one has not searched it — and a sort
+  // hides that better, because the rows come back convincingly ordered
+  // with the real top of the list still on the server.
+  const partial =
+    query && sort
+      ? "search and sort cover"
+      : query
+        ? "search covers"
+        : sort
+          ? "the sort covers"
+          : null;
 
   return (
     <div className="flex h-full flex-col">
@@ -93,7 +149,7 @@ export function ResourceTable<T>({
             className="shrink-0 text-2xs tabular-nums text-content-muted"
             title={
               hasMore
-                ? "More objects exist in the cluster than have been loaded, so search covers what is here"
+                ? "More objects exist in the cluster than have been loaded, so searching and sorting cover only what is here"
                 : undefined
             }
           >
@@ -121,6 +177,8 @@ export function ResourceTable<T>({
               rows={visible}
               rowKey={rowKey}
               onRowClick={onRowClick}
+              sort={sort}
+              onSort={chooseSort}
               empty={
                 query
                   ? `Nothing matches “${query}”.`
@@ -136,7 +194,7 @@ export function ResourceTable<T>({
           <span className="min-w-0 truncate text-content-secondary">
             Showing the first {rows?.length ?? 0}
             {remaining !== null && ` of ${(rows?.length ?? 0) + remaining}`}
-            {query && " — search covers only what is loaded"}
+            {partial && ` — ${partial} only what is loaded`}
           </span>
           <button
             onClick={onLoadMore}
@@ -151,8 +209,8 @@ export function ResourceTable<T>({
       {pageCount > 1 && (
         <div className="flex items-center justify-between border-t px-4 py-1.5 text-2xs">
           <span className="tabular-nums text-content-muted">
-            {start + 1}–{Math.min(start + PAGE_SIZE, filtered.length)} of{" "}
-            {filtered.length}
+            {start + 1}–{Math.min(start + PAGE_SIZE, ordered.length)} of{" "}
+            {ordered.length}
           </span>
           <span className="flex items-center gap-1">
             <PageButton

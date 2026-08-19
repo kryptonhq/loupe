@@ -6,9 +6,10 @@ import type { ReactElement } from "react";
 import { Namespaces, Nodes, Pods } from "./Resources";
 import { api, type NodeSummary, type PodSummary } from "../lib/api";
 
-// The three built-in list views. Each is a table plus a detail view it
-// swaps to, so what is worth covering is the columns an operator scans,
-// and that clicking a row opens the right object.
+// The three built-in list views. Each is a listing and nothing else —
+// what it does with a row is the workspace's business — so what is worth
+// covering is the columns an operator scans, and that a click reports
+// the right object and the right intent.
 
 vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
@@ -22,11 +23,6 @@ vi.mock("../lib/api", async (original) => {
       listNodes: vi.fn(),
       listNamespaces: vi.fn(),
       listPods: vi.fn(),
-      getNode: vi.fn(),
-      getNamespace: vi.fn(),
-      getPod: vi.fn(),
-      listPodsOnNode: vi.fn(),
-      listEvents: vi.fn(),
     },
   };
 });
@@ -34,8 +30,9 @@ vi.mock("../lib/api", async (original) => {
 const listNodes = vi.mocked(api.listNodes);
 const listNamespaces = vi.mocked(api.listNamespaces);
 const listPods = vi.mocked(api.listPods);
-const getNode = vi.mocked(api.getNode);
-const getPod = vi.mocked(api.getPod);
+
+const onOpen = vi.fn();
+const onView = vi.fn();
 
 function pod(overrides: Partial<PodSummary> = {}): PodSummary {
   return {
@@ -70,23 +67,18 @@ function renderPage(page: ReactElement) {
 }
 
 beforeEach(() => {
-  vi.mocked(api.listEvents).mockResolvedValue([]);
-  vi.mocked(api.listPodsOnNode).mockResolvedValue([]);
-
+  onOpen.mockReset();
+  onView.mockReset();
   listNodes.mockReset().mockResolvedValue([node()]);
   listNamespaces
     .mockReset()
     .mockResolvedValue([{ name: "prod", phase: "Active", age: "120d" }]);
   listPods.mockReset().mockResolvedValue([pod()]);
-
-  getNode.mockReset();
-  getPod.mockReset();
-  vi.mocked(api.getNamespace).mockReset();
 });
 
 describe("Nodes", () => {
   it("lists nodes with their roles and readiness", async () => {
-    renderPage(<Nodes />);
+    renderPage(<Nodes onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("worker-1")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText("worker")).toBeInTheDocument();
@@ -95,22 +87,26 @@ describe("Nodes", () => {
 
   it("says NotReady rather than leaving the cell blank", async () => {
     listNodes.mockResolvedValue([node({ ready: false })]);
-    renderPage(<Nodes />);
+    renderPage(<Nodes onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("NotReady")).toBeInTheDocument();
   });
 
   it("renders an em dash for a node with no age", async () => {
     listNodes.mockResolvedValue([node({ age: null })]);
-    renderPage(<Nodes />);
+    renderPage(<Nodes onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("—")).toBeInTheDocument();
   });
 
-  it("opens the node it was told to", async () => {
-    getNode.mockImplementation(() => new Promise(() => {}));
-    const user = renderPage(<Nodes />);
+  it("reports the node it was told to open", async () => {
+    const user = renderPage(<Nodes onOpen={onOpen} view={{}} onView={onView} />);
     await user.click(await screen.findByText("worker-1"));
 
-    await waitFor(() => expect(getNode).toHaveBeenCalledWith("worker-1"));
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "worker-1" }),
+        "here",
+      ),
+    );
   });
 
   it("surfaces a failure to list", async () => {
@@ -118,32 +114,34 @@ describe("Nodes", () => {
       kind: "kubernetes",
       message: 'nodes is forbidden: User "dev" cannot list resource "nodes"',
     });
-    renderPage(<Nodes />);
+    renderPage(<Nodes onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText(/forbidden/)).toBeInTheDocument();
   });
 });
 
 describe("Namespaces", () => {
   it("lists namespaces with their phase", async () => {
-    renderPage(<Namespaces />);
+    renderPage(<Namespaces onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("prod")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
   });
 
-  it("opens the namespace it was told to", async () => {
-    vi.mocked(api.getNamespace).mockImplementation(() => new Promise(() => {}));
-    const user = renderPage(<Namespaces />);
+  it("reports the namespace it was told to open", async () => {
+    const user = renderPage(<Namespaces onOpen={onOpen} view={{}} onView={onView} />);
     await user.click(await screen.findByText("prod"));
 
     await waitFor(() =>
-      expect(api.getNamespace).toHaveBeenCalledWith("prod"),
+      expect(onOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "prod" }),
+        "here",
+      ),
     );
   });
 });
 
 describe("Pods", () => {
   it("shows the columns an operator scans", async () => {
-    renderPage(<Pods />);
+    renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("web-abc")).toBeInTheDocument();
     expect(screen.getByText("1/1")).toBeInTheDocument();
     expect(screen.getByText("worker-1")).toBeInTheDocument();
@@ -153,7 +151,7 @@ describe("Pods", () => {
   it("does not draw attention to a pod that has not restarted", async () => {
     // A coloured 0 on every healthy row would train people to ignore
     // the column that matters.
-    renderPage(<Pods />);
+    renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     const zero = await screen.findByText("0");
     expect(zero).toHaveClass("text-content-muted");
   });
@@ -162,40 +160,70 @@ describe("Pods", () => {
     // Above five restarts the pod is not merely flapping; the column is
     // scanned for exactly this.
     listPods.mockResolvedValue([pod({ restarts: 12 })]);
-    renderPage(<Pods />);
+    renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("12")).toHaveClass("text-danger");
   });
 
   it("lists every namespace by default", async () => {
     // Matching `kubectl get pods -A`, which is what the cluster-wide
     // view is for.
-    renderPage(<Pods />);
+    renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     await screen.findByText("web-abc");
     expect(listPods).toHaveBeenCalledWith(undefined);
     expect(screen.getByText("All namespaces")).toBeInTheDocument();
   });
 
-  it("narrows to one namespace when picked", async () => {
-    const user = renderPage(<Pods />);
+  it("reports the namespace it was asked to narrow to", async () => {
+    // The page reports; where that is kept is the workspace's business.
+    // Holding it here is what used to make the filter evaporate the
+    // moment you opened a pod from the list.
+    const user = renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     await screen.findByText("web-abc");
 
     await user.selectOptions(screen.getByRole("combobox"), "prod");
-    await waitFor(() => expect(listPods).toHaveBeenCalledWith("prod"));
+    await waitFor(() => expect(onView).toHaveBeenCalledWith({ namespace: "prod" }));
   });
 
-  it("opens the pod it was told to, with its namespace", async () => {
+  it("asks the cluster for the namespace the view names", async () => {
+    renderPage(
+      <Pods onOpen={onOpen} view={{ namespace: "prod" }} onView={onView} />,
+    );
+    await waitFor(() => expect(listPods).toHaveBeenCalledWith("prod"));
+    // And the picker shows it, once the namespace list has arrived.
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("prod"));
+  });
+
+  it("reports the pod it was told to open, with its namespace", async () => {
     // A pod is identified by both. Opening on the name alone would find
     // the wrong pod wherever a name repeats across namespaces.
-    getPod.mockImplementation(() => new Promise(() => {}));
-    const user = renderPage(<Pods />);
+    const user = renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     await user.click(await screen.findByText("web-abc"));
 
-    await waitFor(() => expect(getPod).toHaveBeenCalledWith("prod", "web-abc"));
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "web-abc", namespace: "prod" }),
+        "here",
+      ),
+    );
+  });
+
+  it("asks for a new tab when the row is opened with the modifier held", async () => {
+    // The convention a link follows everywhere else, and what lets a
+    // listing be fanned out without returning to it between each one.
+    const user = renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
+    const row = await screen.findByText("web-abc");
+    await user.keyboard("{Meta>}");
+    await user.click(row);
+    await user.keyboard("{/Meta}");
+
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledWith(expect.anything(), "newTab"),
+    );
   });
 
   it("says so when nothing is visible", async () => {
     listPods.mockResolvedValue([]);
-    renderPage(<Pods />);
+    renderPage(<Pods onOpen={onOpen} view={{}} onView={onView} />);
     expect(await screen.findByText("No pods visible.")).toBeInTheDocument();
   });
 });
