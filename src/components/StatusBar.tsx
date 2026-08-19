@@ -1,5 +1,6 @@
 import { Select } from "./Select";
 import type { ClusterInfo, Guard } from "../lib/api";
+import { updateAction, updateSummary, type UpdateState } from "../lib/update";
 
 // The line along the bottom of the window.
 //
@@ -46,6 +47,53 @@ interface StatusBarProps {
   onGuardChange: (guard: Guard) => void;
   onSwitchCluster: () => void;
   onDisconnect: () => void;
+  /// A new version, if there is one. Sits beside the running version,
+  /// which is the one place someone already looks to answer "what am I
+  /// on" — and costs nothing at all when there is no update, which is
+  /// the case almost every time the app is open.
+  update: UpdateState;
+  onUpdate: () => void;
+}
+
+/// The update segment, or nothing.
+function UpdateCell({
+  state,
+  onUpdate,
+}: {
+  state: UpdateState;
+  onUpdate: () => void;
+}) {
+  const summary = updateSummary(state);
+  if (!summary) return null;
+
+  const action = updateAction(state);
+  const tone =
+    state.status === "failed"
+      ? "text-danger"
+      : state.status === "downloading"
+        ? "text-content-secondary"
+        : "text-accent";
+
+  // Not a button while it is downloading: there is nothing a second
+  // click could usefully do, and an inert button invites one.
+  if (!action) {
+    return <span className={`${CELL} ${tone}`}>{summary}</span>;
+  }
+
+  return (
+    <button
+      onClick={onUpdate}
+      title={
+        state.status === "available" && state.notes
+          ? state.notes
+          : "Loupe updates itself; nothing else on the machine changes"
+      }
+      className={`${CELL} ${tone} font-medium transition-colors duration-150 ease-swift hover:bg-content/[0.05]`}
+    >
+      <span aria-hidden>⇩</span>
+      {summary}
+    </button>
+  );
 }
 
 export function StatusBar({
@@ -54,6 +102,8 @@ export function StatusBar({
   onGuardChange,
   onSwitchCluster,
   onDisconnect,
+  update,
+  onUpdate,
 }: StatusBarProps) {
   return (
     <footer
@@ -90,6 +140,8 @@ export function StatusBar({
       {/* Everything after this sits at the far end, where a status bar
           keeps the things you read rather than press. */}
       <span className="min-w-0 flex-1" />
+
+      <UpdateCell state={update} onUpdate={onUpdate} />
 
       <span className={`${CELL} font-mono text-content-muted`}>{cluster.version}</span>
 

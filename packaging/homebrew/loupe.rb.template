@@ -17,6 +17,15 @@ cask "loupe" do
   # the Finder then refuses to open.
   depends_on macos: ">= :catalina"
 
+  # Loupe updates itself, so Homebrew should not try to manage versions
+  # for it. Without this the two disagree the moment the app updates:
+  # brew still believes the installed version is whatever it last put
+  # there, and `brew upgrade` reinstalls an older build over a newer one.
+  #
+  # The cask is still updated on every release — that is what `brew
+  # install` uses, and what someone on a fresh machine gets.
+  auto_updates true
+
   app "Loupe.app"
 
   # No caveats, and no postflight.

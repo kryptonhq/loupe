@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CommandPalette } from "./components/CommandPalette";
@@ -22,6 +22,13 @@ import { Helm, ReleaseDetail } from "./pages/Helm";
 import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
+import {
+  checkForUpdate,
+  percentOf,
+  restart,
+  type PendingUpdate,
+  type UpdateState,
+} from "./lib/update";
 import {
   applyZoom,
   clampZoom,
@@ -92,6 +99,11 @@ export default function App() {
   // never silently lock someone out of their own cluster.
   const [guard, setGuard] = useState<Guard>("open");
 
+  // A new version, once one has been found. `pending` is the handle that
+  // installs it, kept out of render state because it is not display data.
+  const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
+  const pending = useRef<PendingUpdate | null>(null);
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -147,6 +159,15 @@ export default function App() {
 
   useEffect(() => applyZoom(zoom), [zoom]);
 
+  // Once, on launch. Not on a timer: a desktop tool is opened and closed
+  // often enough that startup is plenty, and a background poll is one
+  // more thing reaching the network on a machine that may be on a
+  // metered connection or behind a proxy that dislikes GitHub.
+  useEffect(() => {
+    void lookForUpdate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The menu says what was asked for and this decides what it means, so
   // the menu item and the keystroke cannot drift apart.
   useEffect(() => {
@@ -159,7 +180,10 @@ export default function App() {
       else if (event.payload === ZOOM_OUT) changeZoom(zoomOut);
       else if (event.payload === ZOOM_RESET) changeZoom(() => DEFAULT_ZOOM);
     }).catch(() => null);
-    return () => void unlisten.then((off) => off?.());
+    // The unlisten call can throw too, where the bridge is partial —
+    // browser dev installs enough of it to register a listener and not
+    // enough to remove one.
+    return () => void unlisten.then((off) => off?.()).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -323,6 +347,13 @@ export default function App() {
       run: () => changeZoom(() => DEFAULT_ZOOM),
     });
     out.push({
+      id: "action:check-updates",
+      group: "Action",
+      label: "Check for updates",
+      keywords: "version upgrade new release",
+      run: () => void lookForUpdate(),
+    });
+    out.push({
       id: "action:shortcuts",
       group: "Action",
       label: "Keyboard shortcuts",
@@ -425,6 +456,49 @@ export default function App() {
       // A safeguard that did not persist is worse than one that visibly
       // failed to apply, so put it back.
       await api.contextGuard(cluster.context).then(setGuard).catch(() => {});
+    }
+  }
+
+  /// Ask whether there is a new version. Silent when there is not, and
+  /// silent when the question could not be asked — the app works fine on
+  /// the version already installed, and an offline laptop is the normal
+  /// case rather than a fault worth reporting.
+  async function lookForUpdate() {
+    const found = await checkForUpdate();
+    if (!found) return;
+    pending.current = found;
+    setUpdate({ status: "available", version: found.version, notes: found.notes });
+  }
+
+  /// Whatever the update segment offers next: install it, restart into
+  /// it, or try again after a failure.
+  async function advanceUpdate() {
+    if (update.status === "ready") {
+      await restart();
+      return;
+    }
+
+    const found = pending.current;
+    if (!found) return;
+
+    setUpdate({ status: "downloading", version: found.version, percent: null });
+    try {
+      await found.download((downloaded, total) =>
+        setUpdate({
+          status: "downloading",
+          version: found.version,
+          percent: percentOf(downloaded, total),
+        }),
+      );
+      setUpdate({ status: "ready", version: found.version });
+    } catch (e) {
+      // Shown, unlike a failed check: this one the user asked for and is
+      // waiting on.
+      setUpdate({
+        status: "failed",
+        version: found.version,
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -559,6 +633,8 @@ export default function App() {
           onGuardChange={chooseGuard}
           onSwitchCluster={() => setSwitching(true)}
           onDisconnect={disconnect}
+          update={update}
+          onUpdate={() => void advanceUpdate()}
         />
 
         {paletteOpen && (

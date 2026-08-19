@@ -181,6 +181,27 @@ jobs:
       # script: `${{ }}` pastes the certificate itself into the shell
       # source, where a stray quote would break the script and the value
       # is one `set -x` away from the log.
+      # Updater artifacts need the signing key, and there is no point
+      # producing them without it: an unsigned update is one the app will
+      # refuse to install, so it would be dead weight in every release.
+      #
+      # Absent key means the release is exactly what it was before this
+      # existed — installers only, no latest.json, and no self-update.
+      # Setting TAURI_SIGNING_PRIVATE_KEY is what switches it on, with no
+      # other change needed here.
+      - id: updater
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$UPDATER_KEY" ]; then
+            echo "args=--config tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
       - id: signing
         env:
           CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -208,9 +229,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.release_id }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
+          uploadUpdaterJson: ${{ steps.updater.outputs.enabled }}
 
       # Signed and notarised. The six secrets go together — a partial set
       # makes Tauri attempt a notarisation it cannot finish.
@@ -224,9 +248,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.release_id }}
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
+          uploadUpdaterJson: ${{ steps.updater.outputs.enabled }}
 
   publish:
     name: Publish
@@ -236,6 +263,7 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -249,6 +277,16 @@ jobs:
             // than failing here: the tag looks complete and the gap is
             // only found by whoever tried to download it.
             const expected = [/\.dmg$/, /\.AppImage$/, /\.deb$/, /-setup\.exe$/, /\.msi$/];
+
+            // Only once updates are being signed. Without the key the
+            // release is installers-only by design, and demanding a
+            // manifest that was never meant to exist would fail every
+            // release until someone set a secret they had not chosen to
+            // set. With the key, a missing manifest means the app checks
+            // an endpoint that 404s and no one is ever offered the
+            // update — silent, and exactly worth failing over.
+            if (process.env.UPDATER_KEY) expected.push(/^latest\.json$/);
+
             const missing = expected.filter((p) => !names.some((n) => p.test(n)));
             if (missing.length) {
               core.setFailed(`no asset matching: ${missing.join(", ")}`);
