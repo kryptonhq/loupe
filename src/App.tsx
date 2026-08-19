@@ -150,13 +150,16 @@ export default function App() {
   // The menu says what was asked for and this decides what it means, so
   // the menu item and the keystroke cannot drift apart.
   useEffect(() => {
+    // Caught here rather than on the way out: without a bridge this
+    // rejects immediately, and a rejection only handled at cleanup is
+    // unhandled for as long as the app is mounted — which is the whole
+    // session, and every test that renders it.
     const unlisten = listen<string>(ZOOM_EVENT, (event) => {
       if (event.payload === ZOOM_IN) changeZoom(zoomIn);
       else if (event.payload === ZOOM_OUT) changeZoom(zoomOut);
       else if (event.payload === ZOOM_RESET) changeZoom(() => DEFAULT_ZOOM);
-    });
-    // No bridge in browser dev, where there is no menu to listen to.
-    return () => void unlisten.then((off) => off()).catch(() => {});
+    }).catch(() => null);
+    return () => void unlisten.then((off) => off?.());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
