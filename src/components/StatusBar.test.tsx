@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StatusBar } from "./StatusBar";
 import type { ClusterInfo, Guard } from "../lib/api";
+import type { UpdateState } from "../lib/update";
 
 // The guard is only worth having if it is impossible to miss. It used to
 // sit in the foot of the nav rail; these assert it is legible from the
@@ -16,10 +17,14 @@ const CLUSTER: ClusterInfo = {
   platform: "linux/amd64",
 };
 
-function setup(guard: Guard = "open") {
+function setup(
+  guard: Guard = "open",
+  update: UpdateState = { status: "idle" },
+) {
   const onGuardChange = vi.fn();
   const onSwitchCluster = vi.fn();
   const onDisconnect = vi.fn();
+  const onUpdate = vi.fn();
 
   render(
     <StatusBar
@@ -28,12 +33,15 @@ function setup(guard: Guard = "open") {
       onGuardChange={onGuardChange}
       onSwitchCluster={onSwitchCluster}
       onDisconnect={onDisconnect}
+      update={update}
+      onUpdate={onUpdate}
     />,
   );
   return {
     onGuardChange,
     onSwitchCluster,
     onDisconnect,
+    onUpdate,
     user: userEvent.setup(),
   };
 }
@@ -71,6 +79,8 @@ describe("StatusBar", () => {
         onGuardChange={vi.fn()}
         onSwitchCluster={vi.fn()}
         onDisconnect={vi.fn()}
+        update={{ status: "idle" }}
+        onUpdate={vi.fn()}
       />,
     );
     expect(container.querySelector("footer")?.className).toContain("bg-danger");
@@ -97,5 +107,67 @@ describe("StatusBar", () => {
     const { user, onDisconnect } = setup();
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+});
+
+// The update segment. It sits beside the running version, and costs
+// nothing at all in the case that holds almost every time the app is
+// open: there is no new version.
+describe("StatusBar updates", () => {
+  it("says nothing when there is no update", () => {
+    setup();
+    expect(screen.queryByText(/Update to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Restart to finish/)).not.toBeInTheDocument();
+  });
+
+  it("offers the new version, and reports the click", async () => {
+    const { user, onUpdate } = setup("open", {
+      status: "available",
+      version: "0.1.6",
+      notes: null,
+    });
+
+    await user.click(screen.getByText(/Update to 0\.1\.6/));
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows progress, and does not invite a click mid-download", async () => {
+    setup("open", { status: "downloading", version: "0.1.6", percent: 40 });
+    expect(screen.getByText(/Downloading 0\.1\.6 — 40%/)).toBeInTheDocument();
+    // Nothing a second click could usefully do, so no button to press.
+    expect(screen.queryByRole("button", { name: /Downloading/ })).not.toBeInTheDocument();
+  });
+
+  it("asks for the restart that finishes the job", async () => {
+    const { user, onUpdate } = setup("open", { status: "ready", version: "0.1.6" });
+    await user.click(screen.getByText(/Restart to finish 0\.1\.6/));
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("marks a failed install, and lets it be retried", async () => {
+    // Unlike a failed check, which stays quiet: this one the user asked
+    // for and was waiting on.
+    const { user, onUpdate } = setup("open", {
+      status: "failed",
+      version: "0.1.6",
+      message: "network went away",
+    });
+    const cell = screen.getByText(/Update to 0\.1\.6 failed/);
+    expect(cell.className).toContain("text-danger");
+
+    await user.click(cell);
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows the release notes as the tooltip when there are some", () => {
+    setup("open", {
+      status: "available",
+      version: "0.1.6",
+      notes: "Sortable columns.",
+    });
+    expect(screen.getByRole("button", { name: /Update to 0\.1\.6/ })).toHaveAttribute(
+      "title",
+      "Sortable columns.",
+    );
   });
 });

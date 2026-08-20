@@ -306,12 +306,74 @@ release and relying on the containment that already exists: `publish`
 needs all four builds to succeed, so a notarisation failure leaves a
 draft and an untouched tap rather than anything public.
 
+## Auto-update
+
+Loupe checks for a new version on launch and offers it in the status bar.
+
+Live since 0.1.6, signed by minisign key `734EB84845A08A36`. The three
+steps below are done and are recorded for the day the key has to be
+replaced — which is a bigger event than it looks, so read the warning on
+step 1 before starting.
+
+Turning it on is three things, and only the first cannot be undone:
+
+1. **Generate the key pair**, once, and keep the private half safe:
+
+   ```
+   pnpm tauri signer generate -w ~/.tauri/loupe.key
+   ```
+
+   Losing this key means never being able to update anyone who already
+   has the app installed. It cannot be rotated after the fact: the public
+   half is compiled into every build already out there, and that is what
+   decides whether an update is trusted.
+
+2. **Add two repository secrets** — `TAURI_SIGNING_PRIVATE_KEY` (the
+   contents of `~/.tauri/loupe.key`) and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The release workflow reads them
+   the same way it reads the Apple ones: present means do it, absent
+   means the release is installers-only, exactly as it is today.
+
+3. **Paste the public half** into `plugins.updater.pubkey` in
+   `src-tauri/tauri.conf.json`, replacing the empty string. This is what
+   the app verifies against, so it has to ship in the binary.
+
+   The order matters. A key secret without a matching pubkey is the one
+   broken state: the workflow switches into updater mode and signs, while
+   the binary has nothing to verify against — so either the build fails
+   or the release carries update artifacts no installed app can accept.
+   Set the secret and the pubkey together.
+
+After that every release also carries `latest.json` and a `.sig` beside
+each installer, and `publish` starts requiring the manifest — a release
+whose manifest is missing would leave the app checking an endpoint that
+404s, which is silent and worth failing over.
+
+### What updates, and what does not
+
+`.dmg`, `.msi`/`-setup.exe` and `.AppImage` can all replace themselves.
+The `.deb` cannot and should not: the package manager owns those files,
+and an app that overwrites them behind dpkg's back is a bug report
+waiting to happen. Debian users stay on the manual path until there is an
+apt repository.
+
+Homebrew is told the app self-updates, via `auto_updates true` in the
+cask. Without it brew keeps believing the installed version is whatever
+it last put there, and `brew upgrade` cheerfully reinstalls an older
+build over a newer one. The cask is still refreshed on every release —
+that is what a fresh `brew install` uses.
+
+### The trust surface
+
+The updater is the one path in the app that downloads code and runs it.
+What makes it acceptable is that an artifact is installed only if it
+verifies against the public key in the binary, so a compromised release
+host still cannot ship anything the private key did not sign. That is
+also why the pubkey is empty rather than omitted: with no key the check
+fails and nothing installs, which is the right way round.
+
 ## Not done yet
 
-- **Auto-update.** Tauri ships an updater; it needs a signing key pair
-  and an update manifest published alongside the release. Worth having
-  before there are enough users that "download the new DMG" stops being
-  reasonable.
 - **Linux repositories.** The `.deb` is a direct download, not an apt
   repository. AppImage covers most of the gap.
 - **`homebrew/cask` submission**, once the notability bar is met.

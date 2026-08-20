@@ -64,6 +64,8 @@ tauri-plugin-dialog = "2"
 # template. k8s-openapi is built without default features, so its chrono
 # re-export is not available.
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 
 [dev-dependencies]
 

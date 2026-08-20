@@ -606,6 +606,19 @@ pub fn run() {
     // cluster-supplied string can name a destination.
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Both are here for one feature. The updater fetches and installs
+        // a new build; `process` exists only so the app can relaunch into
+        // it, and is granted `allow-restart` and nothing else — the
+        // webview has no business being able to exit the app.
+        //
+        // An updater is a genuine addition to the trust surface: it is
+        // the one path that downloads code and runs it. What makes that
+        // acceptable is the signature — an artifact is installed only if
+        // it verifies against the public key compiled into this binary,
+        // so a compromised release host still cannot ship anything the
+        // private key did not sign.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             app.manage(SharedSession::default());
             app.manage(VibrancyState(vibrancy::setup(app)));
