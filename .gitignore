@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 coverage/
 lcov.info
+
+# Playwright MCP scratch output.
+.playwright-mcp/
