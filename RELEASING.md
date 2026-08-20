@@ -309,9 +309,11 @@ draft and an untouched tap rather than anything public.
 ## Auto-update
 
 Loupe checks for a new version on launch and offers it in the status bar.
-The plumbing is in place and **switched off until a signing key exists**,
-because an unsigned update is one the app refuses to install — producing
-those artifacts without a key would put dead weight in every release.
+
+Live since 0.1.6, signed by minisign key `734EB84845A08A36`. The three
+steps below are done and are recorded for the day the key has to be
+replaced — which is a bigger event than it looks, so read the warning on
+step 1 before starting.
 
 Turning it on is three things, and only the first cannot be undone:
 
@@ -335,6 +337,12 @@ Turning it on is three things, and only the first cannot be undone:
 3. **Paste the public half** into `plugins.updater.pubkey` in
    `src-tauri/tauri.conf.json`, replacing the empty string. This is what
    the app verifies against, so it has to ship in the binary.
+
+   The order matters. A key secret without a matching pubkey is the one
+   broken state: the workflow switches into updater mode and signs, while
+   the binary has nothing to verify against — so either the build fails
+   or the release carries update artifacts no installed app can accept.
+   Set the secret and the pubkey together.
 
 After that every release also carries `latest.json` and a `.sig` beside
 each installer, and `publish` starts requiring the manifest — a release
