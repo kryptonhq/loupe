@@ -226,8 +226,22 @@ jobs:
         env:
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
+          # Path is relative to the repository root, not to src-tauri.
+          # Both tauri-action's own check and the CLI resolve it from the
+          # working directory, and v0.1.5's first run died on all four
+          # platforms because this said `tauri.updater.conf.json`.
+          OVERLAY=src-tauri/tauri.updater.conf.json
+
           if [ -n "$UPDATER_KEY" ]; then
-            echo "args=--config tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+            # Fail here rather than four platforms later. The overlay is
+            # what turns updater artifacts on; a release that quietly
+            # built without it would publish a manifest-less release to
+            # apps that are now checking for one.
+            if [ ! -f "$OVERLAY" ]; then
+              echo "::error::$OVERLAY is missing, but a signing key is set"
+              exit 1
+            fi
+            echo "args=--config $OVERLAY" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "args=" >> "$GITHUB_OUTPUT"
