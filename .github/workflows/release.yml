@@ -72,6 +72,27 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.tag }}
 
+      # The release body, from CHANGELOG.md. Without it the body is
+      # whatever `generate_release_notes` produces, which is a list of
+      # merged pull request titles — accurate, and not something anyone
+      # reads to decide whether to update.
+      #
+      # Missing section is not fatal: the script exits non-zero, no file
+      # is written, and the step below falls back to the generated notes
+      # rather than publishing an empty body.
+      - id: notes
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if python3 scripts/release-notes.py "$TAG" > "$RUNNER_TEMP/notes.md"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "$RUNNER_TEMP/notes.md"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::no CHANGELOG.md section for $TAG; falling back to generated notes"
+          fi
+        shell: bash
+
       - id: create
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -79,10 +100,21 @@ jobs:
           # `inputs.tag`, and interpolating it into the script body would
           # let it close the string and run as JavaScript.
           TAG: ${{ needs.version.outputs.tag }}
+          NOTES: ${{ runner.temp }}/notes.md
+          HAVE_NOTES: ${{ steps.notes.outputs.found }}
         with:
           script: |
+            const fs = require("fs");
             const tag = process.env.TAG;
             const { owner, repo } = context.repo;
+
+            // Read through the environment rather than interpolated, so
+            // a changelog entry containing a backtick or a quote cannot
+            // close the script and run as JavaScript.
+            const body =
+              process.env.HAVE_NOTES === "true"
+                ? fs.readFileSync(process.env.NOTES, "utf8").trim()
+                : "";
 
             // Reuse the draft if this is a retry, rather than stacking
             // up a second release for the same tag.
@@ -98,7 +130,8 @@ jobs:
               tag_name: tag,
               name: `Loupe ${tag}`,
               draft: true,
-              generate_release_notes: true,
+              body: body || undefined,
+              generate_release_notes: body === "",
             });
             return created.data.id;
           result-encoding: string
