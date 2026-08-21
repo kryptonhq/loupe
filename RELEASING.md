@@ -310,7 +310,7 @@ draft and an untouched tap rather than anything public.
 
 Loupe checks for a new version on launch and offers it in the status bar.
 
-Live since 0.1.6, signed by minisign key `734EB84845A08A36`. The three
+Live since 0.1.5, signed by minisign key `734EB84845A08A36`. The three
 steps below are done and are recorded for the day the key has to be
 replaced — which is a bigger event than it looks, so read the warning on
 step 1 before starting.
