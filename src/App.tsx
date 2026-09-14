@@ -21,6 +21,7 @@ import { KindBrowser } from "./pages/KindBrowser";
 import { Helm, ReleaseDetail } from "./pages/Helm";
 import { Problems } from "./pages/Problems";
 import { badgeCount, routeForProblem } from "./lib/problems";
+import { routeForObject } from "./lib/routes";
 import { useProblems, type ProblemsState } from "./lib/useProblems";
 import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
@@ -660,6 +661,12 @@ export default function App() {
         {paletteOpen && (
           <CommandPalette
             commands={commands}
+            objects={{
+              search: api.searchObjects,
+              // Enter opens here, like clicking a row; ⌘-Enter asks for a
+              // tab of its own.
+              open: (hit, intent) => open(routeForObject(hit), intent),
+            }}
             onClose={() => setPaletteOpen(false)}
           />
         )}

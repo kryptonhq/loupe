@@ -509,6 +509,30 @@ export interface ProblemsSnapshot {
   restartThreshold: number;
 }
 
+/// One object found by cluster-wide search.
+export interface SearchHit {
+  group: string;
+  version: string;
+  kind: string;
+  namespace: string | null;
+  name: string;
+  /// The status cell `kubectl get` would print, when the kind has one.
+  status: string | null;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  indexedKinds: number;
+  totalKinds: number;
+  /// Kinds RBAC would not let this user list.
+  forbiddenKinds: number;
+  failedKinds: number;
+  objects: number;
+  /// Still listing kinds, so an empty result may not be final.
+  warming: boolean;
+  approxBytes: number;
+}
+
 /// What a forward points at. A Service target survives a rollout: the
 /// pod is resolved per connection, so the next one picks a live pod.
 export type ForwardTarget =
@@ -695,6 +719,12 @@ export const api = {
   startProblems: (channel: Channel<ProblemsSnapshot>) =>
     invoke<number>("start_problems", { channel }),
   stopProblems: (id: number) => invoke<boolean>("stop_problems", { id }),
+
+  /// Finds objects of any kind by a fragment of their name. Answers from
+  /// the index as it stands and never waits on the cluster; an empty
+  /// query only starts indexing.
+  searchObjects: (query: string) =>
+    invoke<SearchResponse>("search_objects", { query }),
 
   /// Starts forwarding a local port into the cluster. Rejects when the
   /// local port is taken, before the forward is listed.

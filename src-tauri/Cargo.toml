@@ -68,4 +68,8 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 
 [dev-dependencies]
+# An in-process stand-in for the API server, so request paths that need a
+# `kube::Client` — paging, headers, RBAC refusals — are tested without a
+# cluster. `kube::Client::new` takes any tower service.
+tower = { version = "0.5", features = ["util"] }
 

@@ -1,5 +1,5 @@
 import type { Problem, ProblemsSnapshot, Severity } from "./api";
-import type { Route } from "./routes";
+import { routeForObject, type Route } from "./routes";
 
 // What the Problems view does with a snapshot, as pure functions.
 //
@@ -19,23 +19,7 @@ export const SEVERITY_RANK: Record<Severity, number> = {
 /// everything else, custom resources included, opens the generic detail.
 /// Null for a row with nothing to open.
 export function routeForProblem(problem: Problem): Route | null {
-  const t = problem.target;
-  if (!t) return null;
-  if (t.group === "" && t.kind === "Pod" && t.namespace) {
-    return { type: "pod", namespace: t.namespace, name: t.name };
-  }
-  if (t.group === "" && t.kind === "Node") {
-    return { type: "node", name: t.name };
-  }
-  if (t.group === "" && t.kind === "Namespace") {
-    return { type: "namespace", name: t.name };
-  }
-  return {
-    type: "object",
-    resource: { group: t.group, version: t.version, kind: t.kind },
-    namespace: t.namespace,
-    name: t.name,
-  };
+  return problem.target ? routeForObject(problem.target) : null;
 }
 
 /// Seconds a problem has lasted, measured on the Rust side's clock.

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { groupCommands, rankCommands, type Command } from "./palette";
+import { groupCommands, rankCommands, searchCoverage, type Command } from "./palette";
 
 function command(over: Partial<Command> = {}): Command {
   return {
@@ -148,5 +148,20 @@ describe("groupCommands", () => {
 
   it("handles an empty list", () => {
     expect(groupCommands([], ["Go to"])).toEqual([]);
+  });
+});
+
+describe("searchCoverage", () => {
+  const base = { objects: 1, indexedKinds: 3, totalKinds: 3, forbiddenKinds: 0, failedKinds: 0, warming: false };
+
+  it("says how many objects and kinds were searched", () => {
+    expect(searchCoverage({ ...base, objects: 12_345 })).toBe("12,345 objects in 3 of 3 kinds");
+    expect(searchCoverage(base)).toBe("1 object in 3 of 3 kinds");
+  });
+
+  it("names what could not be searched, and whether it is still going", () => {
+    expect(searchCoverage({ ...base, forbiddenKinds: 1, failedKinds: 2, warming: true })).toBe(
+      "1 object in 3 of 3 kinds · 1 kind not permitted · 2 could not be listed · indexing…",
+    );
   });
 });

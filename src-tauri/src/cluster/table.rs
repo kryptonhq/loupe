@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cluster::discovery::{resolve, scoped_namespace, GvkRef};
 use crate::cluster::Session;
-use crate::error::{AppError, Result};
+use crate::error::Result;
 
 /// The content type that asks for server-side printing.
 const TABLE_ACCEPT: &str = "application/json;as=Table;v=v1;g=meta.k8s.io";
@@ -73,12 +73,23 @@ pub struct ResourceTable {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WireTable {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     column_definitions: Vec<WireColumn>,
-    #[serde(default)]
+    /// `null`, not `[]`, when the kind has no objects — which
+    /// `#[serde(default)]` alone does not cover: it handles a missing
+    /// key, and a present `null` is a type error.
+    #[serde(default, deserialize_with = "null_as_empty")]
     rows: Vec<WireRow>,
     #[serde(default)]
     metadata: WireListMeta,
+}
+
+fn null_as_empty<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 /// The list metadata carrying the cursor.
@@ -218,10 +229,24 @@ pub async fn list_table(
     // cursor, and sending one makes the API server reject the request.
     params.continue_token = continue_token.filter(|t| !t.is_empty());
 
-    let url = <kube::api::DynamicObject as Resource>::url_path(&resource, scope);
+    Ok(fetch_page(&client, &resource, namespaced, scope, &params).await?)
+}
+
+/// One page of a server-printed listing, for a kind already resolved.
+///
+/// Split from `list_table` so the search index can page through every
+/// kind without resolving each one again per page.
+pub(crate) async fn fetch_page(
+    client: &kube::Client,
+    resource: &kube::core::ApiResource,
+    namespaced: bool,
+    scope: Option<&str>,
+    params: &ListParams,
+) -> std::result::Result<ResourceTable, kube::Error> {
+    let url = <kube::api::DynamicObject as Resource>::url_path(resource, scope);
     let request = Request::new(url)
-        .list(&params)
-        .map_err(|e| AppError::Kube(format!("build request: {e}")))?;
+        .list(params)
+        .map_err(kube::Error::BuildRequest)?;
 
     // Same request kube would send, with the Accept header swapped for
     // the one that asks the server to print.
@@ -256,6 +281,67 @@ mod tests {
 
     fn wire(value: serde_json::Value) -> WireTable {
         serde_json::from_value(value).expect("parse table")
+    }
+
+    #[tokio::test]
+    async fn a_page_is_requested_as_a_table_and_a_refusal_keeps_its_status() {
+        use crate::fake_api;
+        let resource = kube::core::ApiResource::erase::<k8s_openapi::api::core::v1::Service>(&());
+
+        let (client, log) = fake_api::client(|seen| {
+            if seen.path == "/api/v1/namespaces/shop/services" {
+                (
+                    http::StatusCode::OK,
+                    json!({
+                        "kind": "Table",
+                        "columnDefinitions": [{"name": "Name", "priority": 0}],
+                        "rows": [{"cells": ["web"], "object": {"metadata": {"name": "web", "namespace": "shop"}}}],
+                        "metadata": {"continue": "next", "remainingItemCount": 4}
+                    }),
+                )
+            } else {
+                fake_api::status(403, "Forbidden")
+            }
+        });
+
+        let page = fetch_page(
+            &client,
+            &resource,
+            true,
+            Some("shop"),
+            &ListParams::default().limit(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.rows[0].name, "web");
+        assert_eq!(page.continue_token.as_deref(), Some("next"));
+        assert_eq!(page.remaining, Some(4));
+        let seen = log.lock().unwrap()[0].clone();
+        assert_eq!(seen.accept, TABLE_ACCEPT);
+        assert!(seen.query.contains("limit=1"));
+
+        let refused = fetch_page(&client, &resource, true, None, &ListParams::default()).await;
+        assert!(matches!(refused, Err(kube::Error::Api(s)) if s.code == 403));
+    }
+
+    #[test]
+    fn an_empty_kind_is_an_empty_table_not_an_error() {
+        // What the API server actually sends for a kind with no objects,
+        // seen from LimitRange and CSIStorageCapacity on a fresh cluster.
+        let table = convert(
+            wire(json!({
+                "kind": "Table",
+                "columnDefinitions": [{"name": "Name", "priority": 0}],
+                "rows": null,
+                "metadata": {"resourceVersion": "1"}
+            })),
+            true,
+        );
+        assert!(table.rows.is_empty());
+        assert_eq!(table.columns.len(), 1);
+        assert!(wire(json!({"columnDefinitions": null, "rows": null}))
+            .rows
+            .is_empty());
     }
 
     #[test]

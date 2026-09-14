@@ -25,6 +25,7 @@ vi.mock("./lib/api", async (original) => {
       startWatch: vi.fn().mockResolvedValue(1),
       startProblems: vi.fn(),
       stopProblems: vi.fn().mockResolvedValue(true),
+      searchObjects: vi.fn(),
       stopWatch: vi.fn().mockResolvedValue(true),
       getPod: vi.fn(),
       getObject: vi.fn(),
@@ -100,6 +101,16 @@ beforeEach(() => {
 
   currentCluster.mockResolvedValue(CLUSTER);
   problemsChannel = null;
+  vi.mocked(api.searchObjects).mockResolvedValue({
+    hits: [],
+    indexedKinds: 0,
+    totalKinds: 0,
+    forbiddenKinds: 0,
+    failedKinds: 0,
+    objects: 0,
+    warming: false,
+    approxBytes: 0,
+  });
   vi.mocked(api.startProblems).mockImplementation(async (channel) => {
     problemsChannel = channel as never;
     return 7;
@@ -834,5 +845,35 @@ describe("App problems", () => {
     expect(api.startProblems).toHaveBeenCalledTimes(1);
     await userEvent.setup().click(screen.getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(api.stopProblems).toHaveBeenCalledWith(7));
+  });
+});
+
+describe("App search", () => {
+  it("finds a pod from the palette and opens it in this tab", async () => {
+    vi.mocked(api.searchObjects).mockImplementation(async (q: string) => ({
+      hits:
+        q === "web"
+          ? [{ group: "", version: "v1", kind: "Pod", namespace: "prod", name: "web-abc", status: "Running" }]
+          : [],
+      indexedKinds: 1,
+      totalKinds: 1,
+      forbiddenKinds: 0,
+      failedKinds: 0,
+      objects: 1,
+      warming: false,
+      approxBytes: 1,
+    }));
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "web");
+    await screen.findByText("prod · Running");
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "web-abc" })).toBeInTheDocument();
+    expect(api.getPod).toHaveBeenCalledWith("prod", "web-abc");
+    // Here, not in a new tab.
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
   });
 });

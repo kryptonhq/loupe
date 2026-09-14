@@ -9,6 +9,8 @@
 mod cluster;
 mod error;
 mod export;
+#[cfg(test)]
+mod fake_api;
 mod guard;
 mod menu;
 mod settings;
@@ -86,6 +88,7 @@ async fn disconnect_context(
     forwards().stop_all().await;
     watches().stop_all().await;
     problem_monitors().stop_all().await;
+    search_index().clear();
     session.inner().drop_context(&context).await;
     Ok(())
 }
@@ -106,6 +109,7 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // they no longer know about.
     watches().stop_all().await;
     problem_monitors().stop_all().await;
+    search_index().clear();
     session.inner().clear().await;
     Ok(())
 }
@@ -539,6 +543,22 @@ async fn stop_problems(id: u64) -> Result<bool> {
     Ok(problem_monitors().stop(id).await)
 }
 
+/// Finds objects of any kind by a fragment of their name, from an index
+/// built in the background. Answers from what is indexed so far and
+/// never waits on the cluster; the response says how complete that is.
+#[tauri::command]
+async fn search_objects(
+    session: tauri::State<'_, SharedSession>,
+    query: String,
+) -> Result<cluster::search::SearchResponse> {
+    search_index().search(session.inner(), &query).await
+}
+
+fn search_index() -> &'static cluster::search::SearchIndex {
+    static INDEX: std::sync::OnceLock<cluster::search::SearchIndex> = std::sync::OnceLock::new();
+    INDEX.get_or_init(cluster::search::SearchIndex::default)
+}
+
 fn problem_monitors() -> &'static cluster::problems::Monitors {
     static MONITORS: std::sync::OnceLock<cluster::problems::Monitors> = std::sync::OnceLock::new();
     MONITORS.get_or_init(cluster::problems::Monitors::default)
@@ -702,6 +722,7 @@ pub fn run() {
             stop_watch,
             start_problems,
             stop_problems,
+            search_objects,
             start_forward,
             list_forwards,
             stop_forward,

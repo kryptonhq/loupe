@@ -12,6 +12,15 @@ This file starts at 0.1.5. Earlier releases are on the
 
 ### Added
 
+- **Search the whole cluster from ⌘K.** Type part of a name and the
+  palette finds matching objects of every kind — custom resources
+  included — rather than only the rows a listing has loaded. Results are
+  grouped by kind with their namespace and status; Enter opens one here,
+  ⌘-Enter in a new tab. The index is built in the background from the
+  API server's own listings, holds names and not contents (Secrets by
+  name only), skips what RBAC does not allow and says how much that was,
+  and is thrown away when you switch cluster.
+
 - **Problems.** One view of everything currently broken across the
   cluster, so "is anything wrong?" has a one-glance answer after
   connecting. Crash loops with their exit codes, images that cannot be
@@ -23,6 +32,13 @@ This file starts at 0.1.5. Earlier releases are on the
   bar, and honest about RBAC: a category you may not list says so
   instead of looking healthy. Grace period and restart threshold are in
   `settings.json`.
+
+### Fixed
+
+- **Listing a kind with no objects** could fail with "invalid type: null,
+  expected a sequence". The API server sends `rows: null` rather than an
+  empty list for an empty kind — seen on `LimitRange` and
+  `CSIStorageCapacity` on a fresh cluster.
 
 - **Signed Linux downloads.** The `.AppImage`, `.deb` and `.rpm` each
   carry a detached GPG signature, so a download can be checked with
