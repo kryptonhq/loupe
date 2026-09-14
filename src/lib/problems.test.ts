@@ -60,6 +60,14 @@ describe("routeForProblem", () => {
     });
   });
 
+  it("opens a namespace in its own view", () => {
+    expect(
+      routeForProblem(
+        problem({ target: { group: "", version: "v1", kind: "Namespace", namespace: null, name: "shop" } }),
+      ),
+    ).toEqual({ type: "namespace", name: "shop" });
+  });
+
   it("has nowhere to go for a category Loupe could not check", () => {
     expect(routeForProblem(problem({ target: null, reason: "NotPermitted" }))).toBeNull();
   });

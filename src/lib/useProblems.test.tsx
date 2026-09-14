@@ -81,6 +81,16 @@ describe("useProblems", () => {
     expect(stopProblems).toHaveBeenCalledWith(1);
   });
 
+  it("stops a monitor that finished starting after the view had gone", async () => {
+    let resolve: (id: number) => void = () => {};
+    startProblems.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
+    const { unmount } = render(<Probe context="prod" />);
+    await waitFor(() => expect(startProblems).toHaveBeenCalled());
+    unmount();
+    await act(async () => resolve(42));
+    expect(stopProblems).toHaveBeenCalledWith(42);
+  });
+
   it("says when the monitor could not start", async () => {
     startProblems.mockRejectedValueOnce({ kind: "not_connected", message: "not connected to a cluster" });
     render(<Probe context="prod" />);

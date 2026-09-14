@@ -344,6 +344,93 @@ fn store_key(obj: &impl ResourceExt) -> String {
     format!("{}/{}", obj.namespace().unwrap_or_default(), obj.name_any())
 }
 
+/// What a watch event means for the monitor.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// The store changed; re-evaluate.
+    Notify,
+    /// Nothing worth re-evaluating for.
+    Quiet,
+    /// This source is finished for good. Re-evaluate once more, so the
+    /// reason it stopped is shown, then end its watch.
+    Stop,
+}
+
+/// Applies one watch event to the store.
+///
+/// Split from `follow` so everything it decides — when a partial list
+/// becomes the store, what a 403 means, which failures are worth saying —
+/// can be tested with events made by hand rather than a cluster.
+fn apply_event<K>(
+    store: &mut Store,
+    source: Source,
+    initial: &mut Option<HashMap<String, K>>,
+    slot: fn(&mut Store) -> &mut HashMap<String, K>,
+    event: std::result::Result<watcher::Event<K>, watcher::Error>,
+) -> Step
+where
+    K: ResourceExt + Trim,
+{
+    match event {
+        Ok(watcher::Event::Init) => {
+            *initial = Some(HashMap::new());
+            Step::Quiet
+        }
+        Ok(watcher::Event::InitApply(mut obj)) => {
+            obj.trim();
+            if let Some(buffer) = initial.as_mut() {
+                buffer.insert(store_key(&obj), obj);
+            }
+            // Not notified: a partial list evaluated as if complete would
+            // briefly report problems that are not there — or, worse, the
+            // absence of ones that are.
+            Step::Quiet
+        }
+        Ok(watcher::Event::InitDone) => {
+            if let Some(buffer) = initial.take() {
+                *slot(store) = buffer;
+            }
+            store.states.insert(source, SourceState::Ready);
+            Step::Notify
+        }
+        Ok(watcher::Event::Apply(mut obj)) => {
+            obj.trim();
+            slot(store).insert(store_key(&obj), obj);
+            Step::Notify
+        }
+        Ok(watcher::Event::Delete(obj)) => {
+            slot(store).remove(&store_key(&obj));
+            Step::Notify
+        }
+        Err(e) if is_forbidden(&e) => {
+            store.states.insert(
+                source,
+                SourceState::Forbidden {
+                    message: e.to_string(),
+                },
+            );
+            slot(store).clear();
+            Step::Stop
+        }
+        Err(e) => {
+            // A watch that drops after its list is still serving data the
+            // watcher will relist; saying "failed" for that would make
+            // every reconnect look like an outage. Only a source that
+            // never loaded is reported.
+            if store.states.get(&source) == Some(&SourceState::Ready) {
+                return Step::Quiet;
+            }
+            store.states.insert(
+                source,
+                SourceState::Failed {
+                    message: e.to_string(),
+                },
+            );
+            Step::Notify
+        }
+    }
+}
+
 /// Follows one kind into the store until the task is aborted.
 async fn follow<K>(
     api: Api<K>,
@@ -367,65 +454,48 @@ async fn follow<K>(
     let mut initial: Option<HashMap<String, K>> = None;
 
     while let Some(event) = stream.next().await {
-        let mut guard = store.lock().expect("problems store poisoned");
-        match event {
-            Ok(watcher::Event::Init) => {
-                initial = Some(HashMap::new());
-                continue;
-            }
-            Ok(watcher::Event::InitApply(mut obj)) => {
-                obj.trim();
-                if let Some(buffer) = initial.as_mut() {
-                    buffer.insert(store_key(&obj), obj);
-                }
-                // Not notified: a partial list evaluated as if complete
-                // would briefly report problems that are not there.
-                continue;
-            }
-            Ok(watcher::Event::InitDone) => {
-                if let Some(buffer) = initial.take() {
-                    *slot(&mut guard) = buffer;
-                }
-                guard.states.insert(source, SourceState::Ready);
-            }
-            Ok(watcher::Event::Apply(mut obj)) => {
-                obj.trim();
-                slot(&mut guard).insert(store_key(&obj), obj);
-            }
-            Ok(watcher::Event::Delete(obj)) => {
-                slot(&mut guard).remove(&store_key(&obj));
-            }
-            Err(e) if is_forbidden(&e) => {
-                guard.states.insert(
-                    source,
-                    SourceState::Forbidden {
-                        message: e.to_string(),
-                    },
-                );
-                slot(&mut guard).clear();
-                drop(guard);
+        let step = apply_event(
+            &mut store.lock().expect("problems store poisoned"),
+            source,
+            &mut initial,
+            slot,
+            event,
+        );
+        match step {
+            Step::Quiet => {}
+            Step::Notify => changed.notify_one(),
+            Step::Stop => {
                 changed.notify_one();
                 return;
             }
-            Err(e) => {
-                // A watch that drops after its list is still serving data
-                // the watcher will relist; saying "failed" for that would
-                // make every reconnect look like an outage. Only a source
-                // that never loaded is reported.
-                if guard.states.get(&source) != Some(&SourceState::Ready) {
-                    guard.states.insert(
-                        source,
-                        SourceState::Failed {
-                            message: e.to_string(),
-                        },
-                    );
-                } else {
-                    continue;
-                }
-            }
         }
-        drop(guard);
-        changed.notify_one();
+    }
+}
+
+/// Re-evaluates the store and pushes the result, on change and on a
+/// timer, until the sink stops accepting.
+async fn publish(
+    store: Arc<SyncMutex<Store>>,
+    changed: Arc<Notify>,
+    limits: Thresholds,
+    sink: &impl ProblemsSink,
+) {
+    // The first tick fires immediately, so the frontend has an answer —
+    // "still loading" — before any watch has listed anything.
+    let mut tick = tokio::time::interval(REEVALUATE_EVERY);
+    loop {
+        tokio::select! {
+            _ = changed.notified() => tokio::time::sleep(COALESCE).await,
+            _ = tick.tick() => {}
+        }
+        let now = k8s_openapi::jiff::Timestamp::now().as_second();
+        let snapshot = store
+            .lock()
+            .expect("problems store poisoned")
+            .snapshot(now, limits);
+        if !sink.send(snapshot) {
+            return;
+        }
     }
 }
 
@@ -492,21 +562,7 @@ pub async fn start(
         watch!(Event, Source::Events, events);
         watch!(PersistentVolumeClaim, Source::PersistentVolumeClaims, pvcs);
 
-        let mut tick = tokio::time::interval(REEVALUATE_EVERY);
-        loop {
-            tokio::select! {
-                _ = changed.notified() => tokio::time::sleep(COALESCE).await,
-                _ = tick.tick() => {}
-            }
-            let now = k8s_openapi::jiff::Timestamp::now().as_second();
-            let snapshot = store
-                .lock()
-                .expect("problems store poisoned")
-                .snapshot(now, limits);
-            if !sink.send(snapshot) {
-                break;
-            }
-        }
+        publish(store, changed, limits, &sink).await;
 
         drop(watches);
         monitors.active.lock().await.remove(&id);
@@ -666,6 +722,212 @@ mod tests {
         assert_eq!(json["sources"][0]["source"], "pods");
         assert_eq!(json["sources"][0]["state"], "loading");
         assert_eq!(json["sources"][0]["category"], "pods");
+    }
+
+    fn pod_named(name: &str) -> Pod {
+        parse(json!({
+            "metadata": { "name": name, "namespace": "shop", "managedFields": [{ "manager": "kubelet" }] },
+            "spec": { "containers": [{ "name": "app" }] }
+        }))
+    }
+
+    fn api_error(code: u16) -> watcher::Error {
+        watcher::Error::InitialListFailed(kube::Error::Api(Box::new(
+            serde_json::from_value::<kube::core::Status>(json!({
+                "status": "Failure", "code": code, "reason": "x", "message": "refused"
+            }))
+            .unwrap(),
+        )))
+    }
+
+    fn pods_slot(s: &mut Store) -> &mut HashMap<String, Pod> {
+        &mut s.pods
+    }
+
+    #[test]
+    fn the_initial_list_replaces_the_store_only_once_it_is_complete() {
+        let mut store = Store::default();
+        store.pods.insert("shop/stale".into(), pod_named("stale"));
+        let mut initial = None;
+        let mut apply =
+            |store: &mut Store, e| apply_event(store, Source::Pods, &mut initial, pods_slot, e);
+
+        assert_eq!(apply(&mut store, Ok(watcher::Event::Init)), Step::Quiet);
+        assert_eq!(
+            apply(&mut store, Ok(watcher::Event::InitApply(pod_named("a")))),
+            Step::Quiet
+        );
+        assert_eq!(
+            apply(&mut store, Ok(watcher::Event::InitApply(pod_named("b")))),
+            Step::Quiet
+        );
+        // Mid-list, the store still holds what it had: a half-listed
+        // cluster evaluated as if complete would be wrong both ways.
+        assert!(store.pods.contains_key("shop/stale"));
+        assert_eq!(store.states.get(&Source::Pods), None);
+
+        assert_eq!(
+            apply(&mut store, Ok(watcher::Event::InitDone)),
+            Step::Notify
+        );
+        let mut keys: Vec<_> = store.pods.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["shop/a", "shop/b"], "a relist drops what is gone");
+        assert_eq!(store.states.get(&Source::Pods), Some(&SourceState::Ready));
+        assert!(
+            store.pods["shop/a"].metadata.managed_fields.is_none(),
+            "stored trimmed"
+        );
+    }
+
+    #[test]
+    fn applies_and_deletes_change_the_store_and_ask_for_evaluation() {
+        let mut store = Store::default();
+        let mut initial = None;
+
+        let step = apply_event(
+            &mut store,
+            Source::Pods,
+            &mut initial,
+            pods_slot,
+            Ok(watcher::Event::Apply(pod_named("a"))),
+        );
+        assert_eq!(step, Step::Notify);
+        assert!(store.pods["shop/a"].metadata.managed_fields.is_none());
+
+        let step = apply_event(
+            &mut store,
+            Source::Pods,
+            &mut initial,
+            pods_slot,
+            Ok(watcher::Event::Delete(pod_named("a"))),
+        );
+        assert_eq!(step, Step::Notify);
+        assert!(store.pods.is_empty());
+    }
+
+    #[test]
+    fn a_403_stops_the_source_and_empties_what_it_held() {
+        let mut store = Store::default();
+        store.pods.insert("shop/a".into(), pod_named("a"));
+        let mut initial = None;
+
+        let step = apply_event(
+            &mut store,
+            Source::Pods,
+            &mut initial,
+            pods_slot,
+            Err(api_error(403)),
+        );
+        assert_eq!(step, Step::Stop);
+        assert!(
+            store.pods.is_empty(),
+            "nothing shown for a kind the user may not list"
+        );
+        assert!(matches!(
+            store.states.get(&Source::Pods),
+            Some(SourceState::Forbidden { .. })
+        ));
+    }
+
+    #[test]
+    fn a_failure_is_reported_before_the_first_list_and_not_after() {
+        let mut store = Store::default();
+        let mut initial = None;
+
+        let step = apply_event(
+            &mut store,
+            Source::Pods,
+            &mut initial,
+            pods_slot,
+            Err(api_error(500)),
+        );
+        assert_eq!(step, Step::Notify);
+        assert!(matches!(
+            store.states.get(&Source::Pods),
+            Some(SourceState::Failed { .. })
+        ));
+
+        // Once listed, a dropped watch is a reconnect, not an outage.
+        store.states.insert(Source::Pods, SourceState::Ready);
+        let step = apply_event(
+            &mut store,
+            Source::Pods,
+            &mut initial,
+            pods_slot,
+            Err(api_error(500)),
+        );
+        assert_eq!(step, Step::Quiet);
+        assert_eq!(store.states.get(&Source::Pods), Some(&SourceState::Ready));
+    }
+
+    struct Collect(tokio::sync::mpsc::UnboundedSender<ProblemsSnapshot>);
+    impl ProblemsSink for Collect {
+        fn send(&self, snapshot: ProblemsSnapshot) -> bool {
+            self.0.send(snapshot).is_ok()
+        }
+    }
+
+    #[tokio::test]
+    async fn publishing_answers_at_once_then_on_every_change_until_nobody_listens() {
+        let store = Arc::new(SyncMutex::new(Store::default()));
+        let changed = Arc::new(Notify::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let task = tokio::spawn({
+            let (store, changed) = (store.clone(), changed.clone());
+            async move { publish(store, changed, Thresholds::default(), &Collect(tx)).await }
+        });
+
+        // An answer before anything has listed: every source loading.
+        let first = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("an immediate snapshot")
+            .unwrap();
+        assert!(first
+            .sources
+            .iter()
+            .all(|s| s.state == SourceState::Loading));
+
+        // A change is published after the coalescing window.
+        store
+            .lock()
+            .unwrap()
+            .states
+            .insert(Source::Pods, SourceState::Ready);
+        changed.notify_one();
+        let second = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("a snapshot after the change")
+            .unwrap();
+        assert_eq!(second.sources[0].state, SourceState::Ready);
+
+        // With nobody listening, the next publish ends the loop.
+        drop(rx);
+        changed.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("publish stops once the sink refuses")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_monitors() {
+        let monitors = Monitors::default();
+        assert!(!monitors.stop(42).await, "an unknown id is not an error");
+
+        let long = || tokio::spawn(tokio::time::sleep(Duration::from_secs(3600)));
+        let a = long();
+        let b = long();
+        monitors.active.lock().await.insert(1, a.abort_handle());
+        monitors.active.lock().await.insert(2, b.abort_handle());
+
+        assert!(monitors.stop(1).await);
+        assert!(a.await.unwrap_err().is_cancelled());
+
+        monitors.stop_all().await;
+        assert!(b.await.unwrap_err().is_cancelled());
+        assert!(monitors.active.lock().await.is_empty());
     }
 
     #[tokio::test]

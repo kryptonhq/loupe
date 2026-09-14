@@ -593,3 +593,265 @@ fn messages_are_single_line_and_bounded() {
     let long = "x ".repeat(500);
     assert!(one_line(&long).chars().count() <= 301);
 }
+
+// ------------------------------------------------------ remaining paths
+
+#[test]
+fn a_container_that_cannot_start_names_the_missing_config() {
+    let p = pod(
+        "cfg",
+        30,
+        json!({
+            "phase": "Pending",
+            "containerStatuses": [{
+                "name": "app", "image": "shop:1", "imageID": "", "ready": false, "restartCount": 0,
+                "state": { "waiting": { "reason": "CreateContainerConfigError", "message": "configmap \"settings\" not found" } }
+            }]
+        }),
+    );
+    let rows = run(|s| s.pods = vec![&p]);
+    assert_eq!(reasons(&rows), ["CreateContainerConfigError"]);
+    assert_eq!(rows[0].severity, Severity::Critical);
+    assert!(rows[0].message.contains("configmap \"settings\" not found"));
+}
+
+#[test]
+fn a_crash_loop_with_no_recorded_termination_still_reads() {
+    let p = pod(
+        "fresh-crash",
+        60,
+        json!({
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "app", "image": "shop:1", "imageID": "", "ready": false, "restartCount": 1,
+                "state": { "waiting": { "reason": "CrashLoopBackOff" } }
+            }]
+        }),
+    );
+    let rows = run(|s| s.pods = vec![&p]);
+    assert!(rows[0].message.contains("no termination recorded"));
+    assert!(
+        rows[0].message.contains("1 restart"),
+        "singular: {}",
+        rows[0].message
+    );
+    assert!(!rows[0].message.contains("1 restarts"));
+}
+
+#[test]
+fn a_scheduled_pod_stuck_pending_says_what_it_is_waiting_on() {
+    let waiting = pod(
+        "creating",
+        600,
+        json!({
+            "phase": "Pending",
+            "conditions": [{ "type": "PodScheduled", "status": "True" }],
+            "containerStatuses": [{
+                "name": "app", "image": "shop:1", "imageID": "", "ready": false, "restartCount": 0,
+                "state": { "waiting": { "reason": "ContainerCreating" } }
+            }]
+        }),
+    );
+    let silent = pod("silent", 600, json!({ "phase": "Pending" }));
+    let rows = run(|s| s.pods = vec![&waiting, &silent]);
+    let messages: Vec<&str> = rows.iter().map(|r| r.message.as_str()).collect();
+    assert!(
+        messages.contains(&"Pending for 10m: ContainerCreating"),
+        "{messages:?}"
+    );
+    assert!(messages.contains(&"Pending for 10m"), "{messages:?}");
+}
+
+#[test]
+fn a_failed_pod_carries_its_reason() {
+    let evicted = pod(
+        "evicted",
+        900,
+        json!({ "phase": "Failed", "reason": "Evicted", "message": "The node was low on resource: memory." }),
+    );
+    let bare = pod("bare", 900, json!({ "phase": "Failed" }));
+    let rows = run(|s| s.pods = vec![&evicted, &bare]);
+    let by_name = |n: &str| {
+        rows.iter()
+            .find(|r| r.target.as_ref().unwrap().name == n)
+            .unwrap()
+    };
+    assert_eq!(by_name("evicted").reason, "Evicted");
+    assert!(by_name("evicted").message.contains("low on resource"));
+    assert_eq!(by_name("bare").message, "Failed");
+}
+
+#[test]
+fn a_running_pod_not_ready_without_container_detail() {
+    let p = pod(
+        "gate",
+        1000,
+        json!({
+            "phase": "Running",
+            "conditions": [{ "type": "Ready", "status": "False", "lastTransitionTime": at(300) }]
+        }),
+    );
+    let rows = run(|s| s.pods = vec![&p]);
+    assert_eq!(rows[0].message, "Not ready for 5m");
+}
+
+#[test]
+fn a_daemonset_short_of_its_nodes_after_the_grace_period() {
+    let d: DaemonSet = parse(json!({
+        "metadata": { "name": "agent", "namespace": "kube-system" },
+        "spec": { "selector": {}, "template": {} },
+        "status": { "desiredNumberScheduled": 3, "numberAvailable": 2, "currentNumberScheduled": 3, "numberMisscheduled": 0, "numberReady": 2 }
+    }));
+    let mut degraded = HashMap::new();
+    degraded.insert("DaemonSet/kube-system/agent".to_string(), NOW - 300);
+    let snap = Snapshot {
+        daemonsets: vec![&d],
+        degraded_since: &degraded,
+        ..Default::default()
+    };
+    let rows = evaluate(&snap, NOW, Thresholds::default());
+    assert_eq!(reasons(&rows), ["ReplicasUnavailable"]);
+    assert!(rows[0].message.starts_with("2 of 3 replicas available"));
+    assert_eq!(is_degraded(&snap), ["DaemonSet/kube-system/agent"]);
+}
+
+#[test]
+fn a_deployment_without_an_available_condition_falls_back_to_first_sighting() {
+    let d: Deployment = parse(json!({
+        "metadata": { "name": "web", "namespace": "shop" },
+        "spec": { "replicas": 1, "selector": {}, "template": {} },
+        "status": {}
+    }));
+    let mut degraded = HashMap::new();
+    let eval = |degraded: &HashMap<String, i64>| {
+        let snap = Snapshot {
+            deployments: vec![&d],
+            degraded_since: degraded,
+            ..Default::default()
+        };
+        (
+            evaluate(&snap, NOW, Thresholds::default()),
+            is_degraded(&snap),
+        )
+    };
+    let (rows, keys) = eval(&degraded);
+    assert!(rows.is_empty());
+    assert_eq!(keys, ["Deployment/shop/web"]);
+
+    degraded.insert("Deployment/shop/web".to_string(), NOW - 200);
+    let (rows, _) = eval(&degraded);
+    assert_eq!(rows[0].message, "0 of 1 replica available for 3m");
+}
+
+#[test]
+fn a_suspended_cronjob_is_not_judged_by_its_last_run() {
+    let cj: CronJob = parse(json!({
+        "metadata": { "name": "paused", "namespace": "ops", "uid": "u" },
+        "spec": { "schedule": "* * * * *", "suspend": true, "jobTemplate": {} }
+    }));
+    let job: Job = parse(json!({
+        "metadata": { "name": "paused-1", "namespace": "ops",
+            "ownerReferences": [{ "apiVersion": "batch/v1", "kind": "CronJob", "name": "paused", "uid": "u" }] },
+        "spec": { "template": {} },
+        "status": { "conditions": [{ "type": "Failed", "status": "True" }] }
+    }));
+    let rows = run(|s| {
+        s.cronjobs = vec![&cj];
+        s.jobs = vec![&job];
+    });
+    assert_eq!(
+        reasons(&rows),
+        ["JobFailed"],
+        "the Job still failed; the suspended CronJob is not flagged"
+    );
+}
+
+#[test]
+fn memory_and_pid_pressure_read_differently() {
+    let n = node(
+        "worker-2",
+        json!({ "status": { "conditions": [
+            { "type": "Ready", "status": "True" },
+            { "type": "MemoryPressure", "status": "True", "message": "kubelet has insufficient memory" },
+            { "type": "PIDPressure", "status": "True" }
+        ]}}),
+    );
+    let rows = run(|s| s.nodes = vec![&n]);
+    let message = |r: &str| rows.iter().find(|p| p.reason == r).unwrap().message.clone();
+    assert_eq!(
+        message("MemoryPressure"),
+        "Node is short of memory: kubelet has insufficient memory"
+    );
+    assert_eq!(message("PIDPressure"), "Node is short of process IDs");
+}
+
+#[test]
+fn a_cordoned_node_is_not_also_blamed_for_its_cordon_taint() {
+    let n = node(
+        "cordoned",
+        json!({ "spec": { "unschedulable": true, "taints": [
+            { "key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule", "timeAdded": at(600) },
+            { "key": "maintenance", "effect": "PreferNoSchedule" }
+        ]}}),
+    );
+    let pending: Pod = parse(json!({
+        "metadata": { "name": "p", "namespace": "x" },
+        "spec": { "containers": [{ "name": "c" }] },
+        "status": { "phase": "Pending", "conditions": [{ "type": "PodScheduled", "status": "False", "reason": "Unschedulable" }] }
+    }));
+    let rows = run(|s| {
+        s.nodes = vec![&n];
+        s.pods = vec![&pending];
+    });
+    assert!(
+        !rows.iter().any(|r| r.reason == "TaintBlocksPods"),
+        "{:?}",
+        reasons(&rows)
+    );
+    let cordon = rows
+        .iter()
+        .find(|r| r.reason == "Unschedulable" && r.category == Category::Nodes)
+        .unwrap();
+    assert_eq!(cordon.since, Some(NOW - 600));
+}
+
+#[test]
+fn a_taint_without_a_value_prints_without_one() {
+    let n = node(
+        "n",
+        json!({ "spec": { "taints": [{ "key": "dedicated", "effect": "NoExecute" }] } }),
+    );
+    let pending: Pod = parse(json!({
+        "metadata": { "name": "p", "namespace": "x" },
+        "spec": { "containers": [{ "name": "c" }] },
+        "status": { "phase": "Pending", "conditions": [{ "type": "PodScheduled", "status": "False", "reason": "Unschedulable" }] }
+    }));
+    let rows = run(|s| {
+        s.nodes = vec![&n];
+        s.pods = vec![&pending];
+    });
+    let row = rows.iter().find(|r| r.reason == "TaintBlocksPods").unwrap();
+    assert_eq!(
+        row.message,
+        "Taint `dedicated:NoExecute` is not tolerated by 1 pending pod"
+    );
+}
+
+#[test]
+fn an_event_with_no_subject_cannot_be_opened_and_uses_series_counts() {
+    let e: Event = parse(json!({
+        "metadata": { "name": "e", "namespace": "shop", "creationTimestamp": at(30) },
+        "involvedObject": {},
+        "type": "Warning",
+        "reason": "Mystery",
+        "series": { "count": 7, "lastObservedTime": format!("{}", at(20).replace('Z', ".000000Z")) }
+    }));
+    let rows = run(|s| s.events = vec![&e]);
+    assert!(rows[0].target.is_none());
+    assert_eq!(rows[0].count, Some(7));
+    assert_eq!(
+        rows[0].message, "Mystery",
+        "the reason stands in for a missing message"
+    );
+    assert_eq!(rows[0].since, Some(NOW - 20));
+}

@@ -199,6 +199,12 @@ describe("StatusBar problems", () => {
     expect(onOpenProblems).toHaveBeenCalled();
   });
 
+  it("reads as a warning when nothing is critical", () => {
+    withProblems({ critical: 0, warning: 1 });
+    const badge = screen.getByRole("button", { name: "1 problem" });
+    expect(badge.className).toContain("text-warn");
+  });
+
   it("says so when nothing is broken, rather than going quiet", () => {
     withProblems({ critical: 0, warning: 0 });
     expect(screen.getByText("No problems")).toBeInTheDocument();

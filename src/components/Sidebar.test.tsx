@@ -38,6 +38,7 @@ const CRDS = [
 
 function setup({
   route = { type: "nodes" } as Parameters<typeof Sidebar>[0]["route"],
+  problemCount = null as number | null,
 } = {}) {
   listApiResources.mockResolvedValue(CRDS);
   const onSelect = vi.fn();
@@ -51,6 +52,7 @@ function setup({
         onSelect={onSelect}
         theme="system"
         onThemeChange={vi.fn()}
+        problemCount={problemCount}
       />
     </QueryClientProvider>,
   );
@@ -147,5 +149,23 @@ describe("Sidebar CRDs section", () => {
     expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
     // The chevron is a disclosure control, not navigation.
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("Sidebar problems", () => {
+  it("leads the rail and reports a problems route", async () => {
+    const { onSelect, user } = setup();
+    await user.click(screen.getByRole("button", { name: /Problems/ }));
+    expect(onSelect).toHaveBeenCalledWith({ type: "problems" });
+  });
+
+  it("counts what is broken beside it", () => {
+    setup({ problemCount: 4 });
+    expect(within(screen.getByRole("button", { name: /Problems/ })).getByText("4")).toBeInTheDocument();
+  });
+
+  it("shows no count when nothing is broken or nothing is known yet", () => {
+    setup({ problemCount: 0 });
+    expect(screen.getByRole("button", { name: /Problems/ }).textContent).not.toMatch(/\d/);
   });
 });

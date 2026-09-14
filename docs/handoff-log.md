@@ -28,20 +28,21 @@ Branch `feat/problems-view`; website branch `docs/loupe-problems`.
   newest owned Job failed), nodes (not ready, pressure, cordoned, taints
   not tolerated by unschedulable pending pods), warning events in the
   last hour deduplicated by (kind, namespace, name, reason), and PVCs
-  pending past grace. 22 unit tests.
+  pending past grace. 34 unit tests.
 - `cluster::problems` — a monitor per subscription: nine
   `kube::runtime::watcher`s (`any_semantic`, paged, with backoff) into a
   trimmed in-memory store, re-evaluated on change (250 ms coalesce) and
   every 15 s (memory only, no API calls), pushed to a Tauri channel.
   Each source degrades on its own; a 403 stops that watch and becomes a
-  single `NotPermitted` row. Stopped on disconnect. 8 unit tests.
+  single `NotPermitted` row. Stopped on disconnect. Event handling (`apply_event`) and the publish
+  loop are split out so they are tested without a cluster; 14 unit tests.
 - `settings.json` → `problems.gracePeriodSeconds` (120) and
   `problems.restartThreshold` (5), read when the monitor starts.
 - Frontend: `problems` route with `ListView` (namespace, search, sort
   per tab), `pages/Problems.tsx`, rail entry with count, status bar
   badge that opens the view, palette command, one window-level
   subscription (`useProblems`). Fixtures in `src/dev/fixtures.ts`
-  (`demoProblems`). 33 new frontend tests.
+  (`demoProblems`). 43 new frontend tests, including App-level wiring.
 
 **Measured** (kind, Kubernetes v1.37.0, single node, `problems::live_tests`)
 
