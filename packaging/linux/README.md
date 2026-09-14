@@ -8,7 +8,14 @@ directory, and the same key is published on the
 [Loupe documentation](https://www.kryptonhq.com/loupe/#verifying-a-download).
 Check the fingerprint against both before trusting it.
 
-Fingerprint: _published with the first signed release_
+Fingerprint:
+
+```
+CC01 D01D 4A8B 455D CC67  EED5 1D2D 0C2A 56D7 8DD0
+```
+
+The key is ed25519, signing only, and expires on 2029-09-13; it will be
+extended before then and re-published here.
 
 ```bash
 gpg --import loupe-release.asc
