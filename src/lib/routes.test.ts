@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   crumbsFor,
+  routeForObject,
   isDetail,
   parentOf,
   routeKey,
@@ -209,5 +210,30 @@ describe("crumbsFor", () => {
       const all = crumbsFor(route);
       expect(all[all.length - 1].route).toBeNull();
     }
+  });
+});
+
+describe("routeForObject", () => {
+  const o = (group: string, kind: string, namespace: string | null = "shop") => ({
+    group,
+    version: "v1",
+    kind,
+    namespace,
+    name: "x",
+  });
+
+  it("opens the kinds with views of their own in those views", () => {
+    expect(routeForObject(o("", "Pod"))).toEqual({ type: "pod", namespace: "shop", name: "x" });
+    expect(routeForObject(o("", "Node", null))).toEqual({ type: "node", name: "x" });
+    expect(routeForObject(o("", "Namespace", null))).toEqual({ type: "namespace", name: "x" });
+  });
+
+  it("opens everything else as an object, including a custom kind that shares a built-in name", () => {
+    expect(routeForObject(o("example.com", "Pod"))).toEqual({
+      type: "object",
+      resource: { group: "example.com", version: "v1", kind: "Pod" },
+      namespace: "shop",
+      name: "x",
+    });
   });
 });

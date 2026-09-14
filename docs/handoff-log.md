@@ -14,6 +14,81 @@ that nothing is tagged until feature 8 is merged. The trade-off accepted:
 a regression in one feature holds up the rest, and the release candidate
 needs a full manual pass before tagging.
 
+## 2. Cluster-wide ⌘K search
+
+Branch `feat/cluster-search`; website branch `docs/loupe-search`.
+
+**Shipped**
+
+- `cluster::search` — one in-memory index for the active context. Built
+  from server-printed Table listings (`resourceVersion=0` for the first
+  page, then paged at 500), four kinds at a time, pods, deployments,
+  services, configmaps and secrets first. Holds name, namespace (interned)
+  and one status word from the Status/Phase/Ready/State column. Secrets
+  are name-only; Events are excluded. 403 marks a kind forbidden for the
+  session; other failures retry after 60 s; kinds are re-listed after
+  5 minutes; a kind discovery stops serving is dropped. A different active
+  context resets the index, and a generation counter stops a warmer for
+  the previous cluster writing into the new one. Cleared on disconnect.
+- `search_objects(query)` never waits on the cluster: it plans what needs
+  listing, starts the warmer if idle, and answers from what is indexed,
+  with coverage counts (`indexedKinds`, `totalKinds`, `forbiddenKinds`,
+  `failedKinds`, `objects`, `warming`, `approxBytes`).
+- Ranking: every whitespace term must match; name prefix > name substring
+  > namespace or kind. At most 10 hits per kind, 60 in all.
+- Palette: object results grouped by kind after the commands, namespace
+  and status as the hint, Enter here / ⌘-Enter new tab, a coverage footer
+  ("5,120 objects in 40 of 43 kinds · 3 kinds not permitted · indexing…"),
+  a still-indexing message and re-query while warming, stale responses
+  ignored. `routeForObject` in `lib/routes.ts` is now shared with Problems.
+- **Fix found on the way:** `table.rs` rejected `rows: null`, which the API
+  server sends for an empty kind, so listing an empty `LimitRange` or
+  `CSIStorageCapacity` failed. Regression test added.
+- Tests: 21 Rust unit tests (plus a Table regression test), one live kind
+  test; 14 new frontend tests. Demo index in `src/dev/fixtures.ts`.
+
+**Measured**
+
+- Live, kind (Kubernetes v1.37.0), release build, 5,519 objects across
+  63 kinds including two CRDs (`search::live_tests`):
+  - first search returned in **0.9–1.5 ms** while warming had not started
+    listing — it does not wait;
+  - fully warm in **0.10 s**;
+  - slowest warm 3-character query end to end **0.7–2.2 ms** (criterion
+    300 ms);
+  - a CRD created after warming was searchable **103 ms** after the
+    discovery refresh;
+  - index **≈ 0.37 MB**.
+- Synthetic, 10,000 objects over 41 kinds, debug build (unit test): index
+  **≈ 0.89 MB** (criterion 50 MB); 3-character query **10.6 ms**.
+- Restricted ServiceAccount (list on pods, configmaps, services): 4 kinds
+  indexed — those three plus `ClusterTrustBundle`, which Kubernetes lets
+  every authenticated user list — and **60 not permitted**; objects of
+  forbidden kinds never appear in results.
+
+**Deviations**
+
+- **Objects are listed alongside matching commands**, below them, rather
+  than only when no command matches. Hiding objects whenever a command
+  matched would make `api` find "Check for updates"-style commands and not
+  the `api` Deployment.
+- **The memory figure is counted, not sampled.** `approxBytes` sums every
+  allocation the index owns (names, interned strings, per-kind metadata,
+  vector capacity). Process RSS includes the webview and kube client and
+  would not isolate the index.
+- **The index is a snapshot, not a watch**, refreshed per kind after five
+  minutes. Watching every kind to keep names current would hold a watch
+  per kind for a feature used in short bursts.
+- **Warming starts when the palette first opens**, not on connect, so a
+  connection costs nothing until search is used. On the measured cluster
+  that is 0.1 s; on a very large one the first query answers from the
+  priority kinds while the rest index.
+- **Two characters**, not three, start an object search.
+- **Context invalidation** is covered by a unit test (reset plus
+  generation) rather than the live test, which has one cluster.
+- **Events are excluded** from the index; the criterion's "≥ 40 kinds" is
+  met without them.
+
 ## 1. Problems view
 
 Branch `feat/problems-view`; website branch `docs/loupe-problems`.

@@ -19,6 +19,7 @@ pub mod logs;
 pub mod problems;
 pub mod related;
 pub mod resources;
+pub mod search;
 pub mod table;
 pub mod watch;
 

@@ -169,6 +169,31 @@ export function withListView(route: Route, patch: Partial<ListView>): Route {
   return { ...route, view: { ...listViewOf(route), ...patch } } as Route;
 }
 
+/// Where an object of any kind opens. Pods, nodes and namespaces have
+/// views of their own; everything else, custom resources included, opens
+/// the generic detail.
+export function routeForObject(o: {
+  group: string;
+  version: string;
+  kind: string;
+  namespace: string | null;
+  name: string;
+}): Route {
+  if (o.group === "") {
+    if (o.kind === "Pod" && o.namespace) {
+      return { type: "pod", namespace: o.namespace, name: o.name };
+    }
+    if (o.kind === "Node") return { type: "node", name: o.name };
+    if (o.kind === "Namespace") return { type: "namespace", name: o.name };
+  }
+  return {
+    type: "object",
+    resource: { group: o.group, version: o.version, kind: o.kind },
+    namespace: o.namespace,
+    name: o.name,
+  };
+}
+
 /// The rail's own entry for a kind, so a breadcrumb says "DaemonSets"
 /// the way the rail does rather than "DaemonSet" the way the API does.
 /// Falls back to the bare kind for anything not in the rail, which is

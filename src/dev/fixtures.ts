@@ -491,6 +491,32 @@ const FIXTURES: Record<string, unknown> = {
   start_pod_logs: 1,
 };
 
+/// What the demo search index holds: a handful of objects across built-in
+/// and custom kinds, with the statuses `kubectl get` would print.
+const DEMO_OBJECTS = [
+  ["", "v1", "Pod", "shop", "checkout-7f9c-x2k", "CrashLoopBackOff"],
+  ["", "v1", "Pod", "shop", "checkout-7f9c-m4p", "Running"],
+  ["", "v1", "Pod", "shop", "web-5d8b-q7p", "ImagePullBackOff"],
+  ["", "v1", "Pod", "kube-system", "coredns-58db975755-wbhbz", "Running"],
+  ["apps", "v1", "Deployment", "shop", "checkout", "1/2"],
+  ["apps", "v1", "Deployment", "shop", "web", "0/2"],
+  ["", "v1", "Service", "shop", "checkout", null],
+  ["", "v1", "Service", "kube-system", "kube-dns", null],
+  ["", "v1", "ConfigMap", "shop", "checkout-settings", null],
+  ["", "v1", "Secret", "shop", "checkout-db-credentials", null],
+  ["networking.k8s.io", "v1", "Ingress", "shop", "checkout", null],
+  ["cert-manager.io", "v1", "Certificate", "shop", "checkout-tls", "True"],
+  ["krypton.ai", "v1alpha1", "Agent", "agents", "mcp-hello", "Ready"],
+  ["", "v1", "Node", null, "orbstack", "Ready"],
+].map(([group, version, kind, namespace, name, status]) => ({
+  group: group as string,
+  version: version as string,
+  kind: kind as string,
+  namespace,
+  name: name as string,
+  status,
+}));
+
 /// A Problems snapshot with one of everything the monitor can say,
 /// including a source RBAC refused — so the view can be laid out and
 /// screenshotted without breaking a cluster on purpose.
@@ -699,6 +725,35 @@ export function installDemoBridge() {
         return Promise.resolve(1);
       }
       if (cmd === "stop_problems") return Promise.resolve(true);
+      // Cluster-wide search over a small demo index. The real one lives in
+      // Rust (cluster::search); this ranks the same way — prefix, then
+      // substring, then namespace or kind — so the palette can be laid out.
+      if (cmd === "search_objects") {
+        const q = String(args.query ?? "").trim().toLowerCase();
+        const terms = q.split(/\s+/).filter(Boolean);
+        const scored = DEMO_OBJECTS.flatMap((o) => {
+          let total = 0;
+          for (const t of terms) {
+            const at = o.name.indexOf(t);
+            const s = at === 0 ? 3 : at > 0 ? 2 : (o.namespace ?? "").includes(t) || o.kind.toLowerCase().includes(t) ? 1 : 0;
+            if (s === 0) return [];
+            total += s;
+          }
+          return q.length >= 2 ? [{ o, total }] : [];
+        });
+        scored.sort((a, b) => b.total - a.total || a.o.name.localeCompare(b.o.name));
+        const kinds = new Set(DEMO_OBJECTS.map((o) => o.kind)).size;
+        return Promise.resolve({
+          hits: scored.slice(0, 60).map((s) => s.o),
+          indexedKinds: kinds,
+          totalKinds: kinds + 3,
+          forbiddenKinds: 3,
+          failedKinds: 0,
+          objects: DEMO_OBJECTS.length,
+          warming: false,
+          approxBytes: 4096,
+        });
+      }
       if (cmd === "apply_yaml") {
         return Promise.resolve({
           yaml: String(args.yaml ?? ""),

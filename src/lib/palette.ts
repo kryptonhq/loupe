@@ -1,3 +1,5 @@
+import type { OpenIntent } from "./routes";
+
 // Ranking for the command palette.
 //
 // The feedback worth noticing is people who use a TUI and dislike using
@@ -23,7 +25,32 @@ export interface Command {
   /// Extra words that should match without being displayed. "deploy"
   /// finding Deployments is worth having and not worth showing.
   keywords?: string;
-  run: () => void;
+  /// How the command was chosen: Enter, or ⌘-Enter for a tab of its own.
+  /// Only commands that open something need care about it.
+  run: (intent: OpenIntent) => void;
+}
+
+/// A short summary of how much of the cluster a search covered, for the
+/// palette's footer. Null when there is nothing worth saying.
+export function searchCoverage(r: {
+  objects: number;
+  indexedKinds: number;
+  totalKinds: number;
+  forbiddenKinds: number;
+  failedKinds: number;
+  warming: boolean;
+}): string {
+  const parts = [
+    `${r.objects.toLocaleString("en-US")} object${r.objects === 1 ? "" : "s"} in ${r.indexedKinds} of ${r.totalKinds} kinds`,
+  ];
+  if (r.forbiddenKinds > 0) {
+    parts.push(`${r.forbiddenKinds} kind${r.forbiddenKinds === 1 ? "" : "s"} not permitted`);
+  }
+  if (r.failedKinds > 0) {
+    parts.push(`${r.failedKinds} could not be listed`);
+  }
+  if (r.warming) parts.push("indexing…");
+  return parts.join(" · ");
 }
 
 const EXACT = 10_000;

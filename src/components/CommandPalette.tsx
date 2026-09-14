@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { groupCommands, rankCommands, type Command } from "../lib/palette";
+import { groupCommands, rankCommands, searchCoverage, type Command } from "../lib/palette";
+import { errorMessage, type SearchHit, type SearchResponse } from "../lib/api";
+import { intentOf, type OpenIntent } from "../lib/routes";
 
 // Keyboard-first navigation.
 //
@@ -14,18 +16,100 @@ import { groupCommands, rankCommands, type Command } from "../lib/palette";
 /// itself while you type.
 export const GROUP_ORDER = ["Go to", "Cluster", "Action"];
 
+/// How long typing has to pause before the cluster index is asked. The
+/// index answers in a millisecond; this is about not sending a round trip
+/// per keystroke across the IPC bridge.
+const SEARCH_DEBOUNCE_MS = 80;
+
+/// Objects start being searched at this many characters. One matches most
+/// of the cluster and tells you nothing.
+const SEARCH_MIN = 2;
+
+/// What the palette needs to search the cluster. Optional, so the palette
+/// still works — commands only — before a cluster is connected.
+export interface ObjectSearch {
+  search: (query: string) => Promise<SearchResponse>;
+  open: (hit: SearchHit, intent: OpenIntent) => void;
+}
+
 export function CommandPalette({
   commands,
   onClose,
+  objects,
 }: {
   commands: Command[];
   onClose: () => void;
+  objects?: ObjectSearch;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [found, setFound] = useState<{ query: string; response: SearchResponse } | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  // Bumped to search again for the same text while the index is warming.
+  const [retry, setRetry] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const ranked = useMemo(() => rankCommands(commands, query), [commands, query]);
+  // Opening the palette starts the index warming, so it has something by
+  // the time the first few characters are typed.
+  useEffect(() => {
+    if (!objects) return;
+    // Through a resolved promise, so a search that throws outright is
+    // handled the same as one that rejects.
+    Promise.resolve()
+      .then(() => objects.search(""))
+      .then(
+      (response) => setFound((f) => f ?? { query: "", response }),
+      () => {},
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!objects) return;
+    const q = query.trim();
+    if (q.length < SEARCH_MIN) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      Promise.resolve()
+        .then(() => objects.search(q))
+        .then(
+        (response) => {
+          // A slower answer to an older query must not replace a newer one.
+          if (!current) return;
+          setFound({ query: q, response });
+          setSearchError(null);
+          // Still indexing and nothing yet: ask again shortly, so results
+          // appear as kinds finish rather than on the next keystroke.
+          if (response.warming) setTimeout(() => current && setRetry((n) => n + 1), 400);
+        },
+        (e) => current && setSearchError(errorMessage(e)),
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, retry]);
+
+  const objectCommands: Command[] = useMemo(() => {
+    const q = query.trim();
+    if (!objects || !found || q.length < SEARCH_MIN || found.query !== q) return [];
+    return found.response.hits.map((hit) => ({
+      id: `object:${hit.group}/${hit.kind}/${hit.namespace ?? ""}/${hit.name}`,
+      // Grouped by kind, after the fixed sections, in the order the index
+      // ranked them — so the kind holding the best match comes first.
+      group: hit.kind,
+      label: hit.name,
+      hint: [hit.namespace, hit.status].filter(Boolean).join(" · ") || undefined,
+      run: (intent: OpenIntent) => objects.open(hit, intent),
+    }));
+  }, [objects, found, query]);
+
+  const ranked = useMemo(
+    () => [...rankCommands(commands, query), ...objectCommands],
+    [commands, query, objectCommands],
+  );
   const groups = useMemo(() => groupCommands(ranked, GROUP_ORDER), [ranked]);
   // The flat order the arrow keys walk, which is the order on screen
   // rather than the ranked order — they differ once grouping applies.
@@ -57,7 +141,8 @@ export function CommandPalette({
         // Closed first: running a command usually changes the view
         // underneath, and a palette left open over it looks stuck.
         onClose();
-        chosen.run();
+        // ⌘-Enter asks for a tab of its own, the way ⌘-click does.
+        chosen.run(intentOf(e));
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -83,7 +168,11 @@ export function CommandPalette({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Go to a kind, switch cluster, run an action…"
+          placeholder={
+            objects
+              ? "Find any object, go to a kind, run an action…"
+              : "Go to a kind, switch cluster, run an action…"
+          }
           aria-label="Command"
           className="w-full border-b bg-transparent px-4 py-3 text-sm outline-none placeholder:text-content-muted"
         />
@@ -91,7 +180,9 @@ export function CommandPalette({
         <div ref={listRef} className="max-h-[52vh] overflow-y-auto">
           {flat.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-content-muted">
-              Nothing matches “{query}”.
+              {found?.response.warming && query.trim().length >= SEARCH_MIN
+                ? `Nothing yet for “${query}” — still indexing the cluster…`
+                : `Nothing matches “${query}”.`}
             </p>
           ) : (
             groups.map((group) => (
@@ -109,9 +200,9 @@ export function CommandPalette({
                       // Hovering moves the selection, so the mouse and
                       // the keyboard never disagree about what Enter does.
                       onMouseMove={() => setActive(index)}
-                      onClick={() => {
+                      onClick={(e) => {
                         onClose();
-                        command.run();
+                        command.run(intentOf(e));
                       }}
                       className={`flex w-full items-center gap-3 px-4 py-1.5 text-left text-sm transition-colors ${
                         selected ? "bg-accent/[0.14] text-content" : "text-content-secondary"
@@ -131,8 +222,16 @@ export function CommandPalette({
           )}
         </div>
 
-        <p className="border-t px-4 py-1.5 text-2xs text-content-muted">
-          ↑↓ to move · ↵ to run · esc to close · ? for shortcuts
+        <p className="flex gap-3 border-t px-4 py-1.5 text-2xs text-content-muted">
+          <span className="shrink-0">↑↓ move · ↵ open · ⌘↵ new tab · esc close</span>
+          {objects && (searchError || found) && (
+            <span
+              className={`min-w-0 flex-1 truncate text-right ${searchError ? "text-danger" : ""}`}
+              role="status"
+            >
+              {searchError ?? (found ? searchCoverage(found.response) : "")}
+            </span>
+          )}
         </p>
       </div>
     </div>
