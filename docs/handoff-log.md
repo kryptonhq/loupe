@@ -21,8 +21,9 @@ Branch `feat/cluster-search`; website branch `docs/loupe-search`.
 **Shipped**
 
 - `cluster::search` — one in-memory index for the active context. Built
-  from server-printed Table listings (`resourceVersion=0` for the first
-  page, then paged at 500), four kinds at a time, pods, deployments,
+  from server-printed Table listings read from the watch cache
+  (`resourceVersion=0`), following a continuation if the server sends one,
+  four kinds at a time, pods, deployments,
   services, configmaps and secrets first. Holds name, namespace (interned)
   and one status word from the Status/Phase/Ready/State column. Secrets
   are name-only; Events are excluded. 403 marks a kind forbidden for the
@@ -53,7 +54,7 @@ Branch `feat/cluster-search`; website branch `docs/loupe-search`.
   63 kinds including two CRDs (`search::live_tests`):
   - first search returned in **0.9–1.5 ms** while warming had not started
     listing — it does not wait;
-  - fully warm in **0.10 s**;
+  - fully warm in **0.05 s** (0.10 s before switching to watch-cache reads);
   - slowest warm 3-character query end to end **0.7–2.2 ms** (criterion
     300 ms);
   - a CRD created after warming was searchable **103 ms** after the
@@ -83,6 +84,13 @@ Branch `feat/cluster-search`; website branch `docs/loupe-search`.
   connection costs nothing until search is used. On the measured cluster
   that is 0.1 s; on a very large one the first query answers from the
   priority kinds while the rest index.
+- **Watch-cache reads are unpaged.** The handoff asks for
+  `resourceVersion=0` *and* pagination. kube-rs drops `resourceVersion=0`
+  whenever a `limit` is set (servers have not honoured the combination
+  consistently), which would send every listing to etcd instead. The index
+  takes the cache read and follows a `continue` token if one comes back.
+  Caught by the in-process fake API server test, not the live test, which
+  passed either way.
 - **Two characters**, not three, start an object search.
 - **Context invalidation** is covered by a unit test (reset plus
   generation) rather than the live test, which has one cluster.

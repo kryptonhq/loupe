@@ -283,6 +283,47 @@ mod tests {
         serde_json::from_value(value).expect("parse table")
     }
 
+    #[tokio::test]
+    async fn a_page_is_requested_as_a_table_and_a_refusal_keeps_its_status() {
+        use crate::fake_api;
+        let resource = kube::core::ApiResource::erase::<k8s_openapi::api::core::v1::Service>(&());
+
+        let (client, log) = fake_api::client(|seen| {
+            if seen.path == "/api/v1/namespaces/shop/services" {
+                (
+                    http::StatusCode::OK,
+                    json!({
+                        "kind": "Table",
+                        "columnDefinitions": [{"name": "Name", "priority": 0}],
+                        "rows": [{"cells": ["web"], "object": {"metadata": {"name": "web", "namespace": "shop"}}}],
+                        "metadata": {"continue": "next", "remainingItemCount": 4}
+                    }),
+                )
+            } else {
+                fake_api::status(403, "Forbidden")
+            }
+        });
+
+        let page = fetch_page(
+            &client,
+            &resource,
+            true,
+            Some("shop"),
+            &ListParams::default().limit(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.rows[0].name, "web");
+        assert_eq!(page.continue_token.as_deref(), Some("next"));
+        assert_eq!(page.remaining, Some(4));
+        let seen = log.lock().unwrap()[0].clone();
+        assert_eq!(seen.accept, TABLE_ACCEPT);
+        assert!(seen.query.contains("limit=1"));
+
+        let refused = fetch_page(&client, &resource, true, None, &ListParams::default()).await;
+        assert!(matches!(refused, Err(kube::Error::Api(s)) if s.code == 403));
+    }
+
     #[test]
     fn an_empty_kind_is_an_empty_table_not_an_error() {
         // What the API server actually sends for a kind with no objects,

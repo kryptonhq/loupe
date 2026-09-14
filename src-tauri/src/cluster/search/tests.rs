@@ -592,3 +592,191 @@ fn a_three_character_query_over_ten_thousand_objects_is_fast() {
     // are an order of magnitude faster.
     assert!(slowest < Duration::from_millis(300), "{slowest:?}");
 }
+
+// ------------------------------------------------- through the client
+
+mod wire {
+    use super::*;
+    use crate::fake_api::{self, Seen};
+    use http::StatusCode;
+    use serde_json::{json, Value};
+
+    fn table_page(names: &[&str], cont: Option<&str>) -> (StatusCode, Value) {
+        (
+            StatusCode::OK,
+            json!({
+                "kind": "Table", "apiVersion": "meta.k8s.io/v1",
+                "metadata": { "continue": cont.unwrap_or("") },
+                "columnDefinitions": [{ "name": "Name", "priority": 0 }, { "name": "Status", "priority": 0 }],
+                "rows": names.iter().map(|n| json!({
+                    "cells": [n, "Running"],
+                    "object": { "metadata": { "name": n, "namespace": "shop" } }
+                })).collect::<Vec<_>>()
+            }),
+        )
+    }
+
+    /// Pods over two pages, Secrets refused, ConfigMaps empty.
+    fn cluster(seen: &Seen) -> (StatusCode, Value) {
+        match seen.path.as_str() {
+            "/api/v1/pods" if seen.query.contains("continue=page2") => table_page(&["api-2"], None),
+            "/api/v1/pods" => table_page(&["api-1"], Some("page2")),
+            "/api/v1/secrets" => fake_api::status(403, "Forbidden"),
+            "/api/v1/configmaps" => (
+                StatusCode::OK,
+                json!({ "kind": "Table", "columnDefinitions": [], "rows": null }),
+            ),
+            // Discovery, for the end-to-end test.
+            "/api" => (
+                StatusCode::OK,
+                json!({ "kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": [] }),
+            ),
+            "/apis" => (
+                StatusCode::OK,
+                json!({ "kind": "APIGroupList", "apiVersion": "v1", "groups": [] }),
+            ),
+            "/api/v1" => (
+                StatusCode::OK,
+                json!({
+                    "kind": "APIResourceList", "groupVersion": "v1",
+                    "resources": [
+                        { "name": "pods", "singularName": "pod", "namespaced": true, "kind": "Pod", "verbs": ["get", "list", "watch"] },
+                        { "name": "secrets", "singularName": "secret", "namespaced": true, "kind": "Secret", "verbs": ["get", "list"] },
+                        { "name": "configmaps", "singularName": "configmap", "namespaced": true, "kind": "ConfigMap", "verbs": ["list"] },
+                        { "name": "events", "singularName": "event", "namespaced": true, "kind": "Event", "verbs": ["list"] }
+                    ]
+                }),
+            ),
+            other => panic!("unexpected request to {other}?{}", seen.query),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_kind_is_read_from_the_watch_cache_and_continuations_are_followed() {
+        let (client, log) = fake_api::client(cluster);
+        let pages = list_kind(&client, &info("", "Pod", true)).await.unwrap();
+
+        let names: Vec<&str> = pages
+            .iter()
+            .flat_map(|p| p.rows.iter().map(|r| r.name.as_str()))
+            .collect();
+        assert_eq!(names, ["api-1", "api-2"]);
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 2);
+        assert!(
+            log[0].query.contains("resourceVersion=0"),
+            "read from the watch cache: {}",
+            log[0].query
+        );
+        assert!(
+            !log[0].query.contains("limit="),
+            "a limit would make kube drop the resource version"
+        );
+        assert!(log[1].query.contains("continue=page2"));
+        assert!(
+            !log[1].query.contains("resourceVersion"),
+            "a continuation cannot carry one: {}",
+            log[1].query
+        );
+        assert!(
+            log.iter().all(|s| s.accept.contains("as=Table")),
+            "asks the server to print"
+        );
+    }
+
+    #[tokio::test]
+    async fn warming_lists_every_queued_kind_and_records_refusals() {
+        let (client, log) = fake_api::client(cluster);
+        let index: &'static SearchIndex = Box::leak(Box::default());
+        let generation = {
+            let mut data = index.data.lock().unwrap();
+            reset(&mut data, "fake");
+            plan(
+                &mut data,
+                &[
+                    info("", "Pod", true),
+                    info("", "Secret", true),
+                    info("", "ConfigMap", true),
+                ],
+                Instant::now(),
+            );
+            data.warming = true;
+            data.generation
+        };
+
+        warm(index, client, generation).await;
+
+        let data = index.data.lock().unwrap();
+        assert!(!data.warming, "the warmer says when it is done");
+        assert!(data.queue.is_empty() && data.in_flight.is_empty());
+        assert_eq!(data.kinds["/v1/Pod"].objects.len(), 2);
+        assert!(
+            data.kinds["/v1/ConfigMap"].objects.is_empty(),
+            "an empty kind is indexed, not failed"
+        );
+        assert!(data.forbidden.contains("/v1/Secret"));
+        assert!(log
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|s| !s.path.contains("events")));
+    }
+
+    #[tokio::test]
+    async fn a_warmer_for_a_cluster_that_was_left_writes_nothing() {
+        let (client, _) = fake_api::client(cluster);
+        let index: &'static SearchIndex = Box::leak(Box::default());
+        let stale = {
+            let mut data = index.data.lock().unwrap();
+            reset(&mut data, "old");
+            plan(&mut data, &[info("", "Pod", true)], Instant::now());
+            let g = data.generation;
+            // The user switches cluster before the warmer runs.
+            reset(&mut data, "new");
+            g
+        };
+        warm(index, client, stale).await;
+        let data = index.data.lock().unwrap();
+        assert!(data.kinds.is_empty());
+        assert_eq!(data.context, "new");
+    }
+
+    #[tokio::test]
+    async fn searching_indexes_in_the_background_and_disconnecting_forgets() {
+        let (client, _) = fake_api::client(cluster);
+        let session = Session::default();
+        session
+            .set(
+                client,
+                crate::cluster::ClusterInfo {
+                    context: "fake".into(),
+                    server: String::new(),
+                    version: String::new(),
+                    platform: String::new(),
+                },
+            )
+            .await;
+        let index: &'static SearchIndex = Box::leak(Box::default());
+
+        let first = index.search(&session, "api").await.unwrap();
+        assert_eq!(first.total_kinds, 3, "events are not a kind to index");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let found = loop {
+            let r = index.search(&session, "api").await.unwrap();
+            if !r.warming && r.indexed_kinds == 2 {
+                break r;
+            }
+            assert!(Instant::now() < deadline, "never finished warming");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(names(&found), ["Pod/api-1", "Pod/api-2"]);
+        assert_eq!(found.forbidden_kinds, 1);
+        assert_eq!(found.hits[0].status.as_deref(), Some("Running"));
+
+        index.clear();
+        let data = index.data.lock().unwrap();
+        assert!(data.kinds.is_empty() && data.context.is_empty());
+    }
+}

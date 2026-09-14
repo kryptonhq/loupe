@@ -2257,6 +2257,7 @@ dependencies = [
  "tauri-plugin-updater",
  "thiserror 2.0.19",
  "tokio",
+ "tower",
  "window-vibrancy 0.8.0",
 ]
 

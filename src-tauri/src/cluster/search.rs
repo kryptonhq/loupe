@@ -44,8 +44,7 @@ use crate::error::Result;
 /// server's priority and fairness has to shed.
 const CONCURRENCY: usize = 4;
 
-/// Objects per page. The initial page asks for the watch cache, which
-/// the API server may answer in full regardless; later pages are paged.
+/// Objects per page, for a continuation the server chose to send.
 const PAGE: u32 = 500;
 
 /// A kind indexed longer ago than this is listed again the next time a
@@ -361,10 +360,15 @@ async fn list_kind(
         plural: info.plural.clone(),
     };
     let mut pages = Vec::new();
-    // The first page from the watch cache (`resourceVersion=0`), which is
-    // the cheap read for the API server. A continuation cannot carry a
-    // resource version, so later pages go without.
-    let mut params = ListParams::default().match_any().limit(PAGE);
+    // From the API server's watch cache (`resourceVersion=0`), which is
+    // the read that costs it least — no trip to etcd.
+    //
+    // Unpaged, deliberately. A limit alongside `resourceVersion=0` is not
+    // honoured consistently across server versions, so kube drops the
+    // resource version whenever a limit is set, and the read would go to
+    // etcd instead. A cache read of one kind's names is the cheaper of the
+    // two. If the server pages anyway, the continuation is followed.
+    let mut params = ListParams::default().match_any();
     loop {
         let page = fetch_page(client, &resource, info.namespaced, None, &params).await?;
         let next = page.continue_token.clone();

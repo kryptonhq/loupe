@@ -321,6 +321,17 @@ describe("0.1.5 command arguments", () => {
     });
   });
 
+  it("names the arguments for problems and search", async () => {
+    await api.startProblems(channel as never);
+    expect(lastCall()).toEqual({ command: "start_problems", args: { channel } });
+
+    await api.stopProblems(4);
+    expect(lastCall()).toEqual({ command: "stop_problems", args: { id: 4 } });
+
+    await api.searchObjects("api");
+    expect(lastCall()).toEqual({ command: "search_objects", args: { query: "api" } });
+  });
+
   it("names the arguments for the guards, related objects and saving", async () => {
     await api.contextGuard("prod");
     expect(lastCall()).toEqual({ command: "context_guard", args: { context: "prod" } });

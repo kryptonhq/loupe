@@ -9,6 +9,8 @@
 mod cluster;
 mod error;
 mod export;
+#[cfg(test)]
+mod fake_api;
 mod guard;
 mod menu;
 mod settings;
