@@ -85,6 +85,7 @@ async fn disconnect_context(
     exec_sessions().close_all().await;
     forwards().stop_all().await;
     watches().stop_all().await;
+    problem_monitors().stop_all().await;
     session.inner().drop_context(&context).await;
     Ok(())
 }
@@ -104,6 +105,7 @@ async fn disconnect(session: tauri::State<'_, SharedSession>) -> Result<()> {
     // A watch against a cluster the user has left is an open connection
     // they no longer know about.
     watches().stop_all().await;
+    problem_monitors().stop_all().await;
     session.inner().clear().await;
     Ok(())
 }
@@ -519,6 +521,29 @@ async fn stop_watch(id: u64) -> Result<bool> {
     Ok(watches().stop(id).await)
 }
 
+/// Keeps the Problems view current, pushing a snapshot whenever the
+/// answer may have changed. Thresholds are read from settings when it
+/// starts, so an edit to `settings.json` applies on the next connect.
+#[tauri::command]
+async fn start_problems(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    channel: tauri::ipc::Channel<cluster::problems::ProblemsSnapshot>,
+) -> Result<u64> {
+    let limits = settings::load(&app).problems.thresholds();
+    cluster::problems::start(session.inner(), problem_monitors(), limits, channel).await
+}
+
+#[tauri::command]
+async fn stop_problems(id: u64) -> Result<bool> {
+    Ok(problem_monitors().stop(id).await)
+}
+
+fn problem_monitors() -> &'static cluster::problems::Monitors {
+    static MONITORS: std::sync::OnceLock<cluster::problems::Monitors> = std::sync::OnceLock::new();
+    MONITORS.get_or_init(cluster::problems::Monitors::default)
+}
+
 /// Open watches. A process singleton for the same reason as the other
 /// registries: the tasks must outlive the command that started them.
 fn watches() -> &'static cluster::watch::Watches {
@@ -675,6 +700,8 @@ pub fn run() {
             stop_pod_logs,
             start_watch,
             stop_watch,
+            start_problems,
+            stop_problems,
             start_forward,
             list_forwards,
             stop_forward,

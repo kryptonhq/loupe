@@ -19,6 +19,9 @@ import { ObjectDetail } from "./pages/ObjectDetail";
 import { Crds } from "./pages/Crds";
 import { KindBrowser } from "./pages/KindBrowser";
 import { Helm, ReleaseDetail } from "./pages/Helm";
+import { Problems } from "./pages/Problems";
+import { badgeCount, routeForProblem } from "./lib/problems";
+import { useProblems, type ProblemsState } from "./lib/useProblems";
 import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
@@ -108,6 +111,11 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const queryClient = useQueryClient();
+
+  // One subscription for the window: the status bar and the rail count
+  // what the Problems view lists, so they share it.
+  const problems = useProblems(cluster?.context ?? null);
+  const problemCount = problems.snapshot ? badgeCount(problems.snapshot) : null;
 
   const tab = activeTab(workspace);
   const route = currentRoute(workspace);
@@ -239,6 +247,12 @@ export default function App() {
         run: () => jump(to),
       });
 
+    goTo(
+      "Problems",
+      { type: "problems" },
+      undefined,
+      "broken failing errors health issues crashloop pending warnings",
+    );
     goTo("Nodes", { type: "nodes" });
     goTo("Namespaces", { type: "namespaces" }, undefined, "ns");
     goTo("Pods", { type: "pods" });
@@ -587,6 +601,9 @@ export default function App() {
             onSelect={open}
             theme={theme}
             onThemeChange={chooseTheme}
+            problemCount={
+              problemCount ? problemCount.critical + problemCount.warning : null
+            }
           />
 
           <main className="flex min-w-0 flex-1 flex-col">
@@ -622,6 +639,7 @@ export default function App() {
                 open={open}
                 back={back}
                 onView={changeView}
+                problems={problems}
               />
             </div>
           </main>
@@ -635,6 +653,8 @@ export default function App() {
           onDisconnect={disconnect}
           update={update}
           onUpdate={() => void advanceUpdate()}
+          problems={problemCount}
+          onOpenProblems={() => open({ type: "problems" })}
         />
 
         {paletteOpen && (
@@ -663,15 +683,30 @@ function View({
   open,
   back,
   onView,
+  problems,
 }: {
   route: Route;
   open: (route: Route, intent?: OpenIntent) => void;
   back: () => void;
   onView: (patch: Partial<ListView>) => void;
+  problems: ProblemsState;
 }) {
   const view = listViewOf(route);
 
   switch (route.type) {
+    case "problems":
+      return (
+        <Problems
+          state={problems}
+          onOpen={(p, i) => {
+            const to = routeForProblem(p);
+            if (to) open(to, i);
+          }}
+          view={view}
+          onView={onView}
+        />
+      );
+
     case "nodes":
       return (
         <Nodes

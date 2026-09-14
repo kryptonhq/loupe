@@ -32,6 +32,7 @@ export interface ListView {
 }
 
 export type Route =
+  | { type: "problems"; view?: ListView }
   | { type: "nodes"; view?: ListView }
   | { type: "namespaces"; view?: ListView }
   | { type: "pods"; view?: ListView }
@@ -103,6 +104,8 @@ export function routeKey(route: Route): string {
 /// crumbs and by the detail view's own header.
 export function routeLabel(route: Route): string {
   switch (route.type) {
+    case "problems":
+      return "Problems";
     case "nodes":
       return "Nodes";
     case "namespaces":

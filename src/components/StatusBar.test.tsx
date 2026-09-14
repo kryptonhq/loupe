@@ -171,3 +171,41 @@ describe("StatusBar updates", () => {
     );
   });
 });
+
+describe("StatusBar problems", () => {
+  function withProblems(problems: { critical: number; warning: number } | null) {
+    const onOpenProblems = vi.fn();
+    render(
+      <StatusBar
+        cluster={CLUSTER}
+        guard="open"
+        onGuardChange={vi.fn()}
+        onSwitchCluster={vi.fn()}
+        onDisconnect={vi.fn()}
+        update={{ status: "idle" }}
+        onUpdate={vi.fn()}
+        problems={problems}
+        onOpenProblems={onOpenProblems}
+      />,
+    );
+    return { onOpenProblems, user: userEvent.setup() };
+  }
+
+  it("counts what is broken and opens the view on click", async () => {
+    const { onOpenProblems, user } = withProblems({ critical: 2, warning: 3 });
+    const badge = screen.getByRole("button", { name: "5 problems" });
+    expect(badge).toHaveAttribute("title", expect.stringContaining("2 critical, 3 warning"));
+    await user.click(badge);
+    expect(onOpenProblems).toHaveBeenCalled();
+  });
+
+  it("says so when nothing is broken, rather than going quiet", () => {
+    withProblems({ critical: 0, warning: 0 });
+    expect(screen.getByText("No problems")).toBeInTheDocument();
+  });
+
+  it("claims nothing before the first answer", () => {
+    withProblems(null);
+    expect(screen.queryByText(/problem/i)).not.toBeInTheDocument();
+  });
+});

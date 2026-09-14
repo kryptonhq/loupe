@@ -53,6 +53,49 @@ interface StatusBarProps {
   /// the case almost every time the app is open.
   update: UpdateState;
   onUpdate: () => void;
+  /// What is broken right now, or null before the first answer. The one
+  /// cluster-state fact that changes by itself, which is why it is here
+  /// and not only on its own page.
+  problems?: ProblemCount | null;
+  onOpenProblems?: () => void;
+}
+
+export interface ProblemCount {
+  critical: number;
+  warning: number;
+}
+
+/// The problems segment. Always present once there is an answer, so
+/// "0 problems" is something you can read rather than infer from an
+/// absence.
+function ProblemsCell({
+  count,
+  onOpen,
+}: {
+  count: ProblemCount | null | undefined;
+  onOpen?: () => void;
+}) {
+  if (!count) return null;
+  const total = count.critical + count.warning;
+  const tone =
+    count.critical > 0 ? "text-danger" : count.warning > 0 ? "text-warn" : "text-content-muted";
+  const dot = count.critical > 0 ? "bg-danger" : count.warning > 0 ? "bg-warn" : "bg-success";
+  return (
+    <button
+      onClick={onOpen}
+      title={
+        total === 0
+          ? "Nothing broken right now. Open Problems"
+          : `${count.critical} critical, ${count.warning} warning. Open Problems`
+      }
+      className={`${CELL} ${tone} ${total > 0 ? "font-medium" : ""} transition-colors duration-150 ease-swift hover:bg-content/[0.05]`}
+    >
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+      <span className="tabular-nums">
+        {total === 0 ? "No problems" : `${total} problem${total === 1 ? "" : "s"}`}
+      </span>
+    </button>
+  );
 }
 
 /// The update segment, or nothing.
@@ -104,6 +147,8 @@ export function StatusBar({
   onDisconnect,
   update,
   onUpdate,
+  problems,
+  onOpenProblems,
 }: StatusBarProps) {
   return (
     <footer
@@ -136,6 +181,8 @@ export function StatusBar({
           <option value="readOnly">Refused</option>
         </Select>
       </span>
+
+      <ProblemsCell count={problems} onOpen={onOpenProblems} />
 
       {/* Everything after this sits at the far end, where a status bar
           keeps the things you read rather than press. */}

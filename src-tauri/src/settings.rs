@@ -69,6 +69,43 @@ pub struct Settings {
     /// say so at every start is the same as not having the control.
     #[serde(default = "default_zoom")]
     pub zoom: f64,
+
+    /// Thresholds for the Problems view. Not in the UI: the defaults are
+    /// right for most clusters, and the ones they are wrong for are run
+    /// by people comfortable editing this file.
+    pub problems: ProblemsSettings,
+}
+
+/// What counts as broken rather than still starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProblemsSettings {
+    /// How long a pod may be pending or unready, a workload short of
+    /// replicas, or a claim unbound, before it is listed.
+    pub grace_period_seconds: u32,
+    /// Restarts within the last hour that make a running container
+    /// worth listing.
+    pub restart_threshold: u32,
+}
+
+impl Default for ProblemsSettings {
+    fn default() -> Self {
+        Self {
+            grace_period_seconds: 120,
+            restart_threshold: 5,
+        }
+    }
+}
+
+impl ProblemsSettings {
+    pub fn thresholds(self) -> crate::cluster::problems::Thresholds {
+        crate::cluster::problems::Thresholds {
+            grace_seconds: i64::from(self.grace_period_seconds),
+            // A threshold of zero would list every container; one is the
+            // lowest that means anything.
+            restart_threshold: i32::try_from(self.restart_threshold.max(1)).unwrap_or(i32::MAX),
+        }
+    }
 }
 
 /// Serde needs a function for a non-zero default, and `Default` for the
@@ -87,6 +124,7 @@ impl Default for Settings {
             protected_contexts: Vec::new(),
             protected_patterns: Vec::new(),
             zoom: default_zoom(),
+            problems: ProblemsSettings::default(),
         }
     }
 }
@@ -263,6 +301,31 @@ mod tests {
         assert_eq!(clamp_zoom(f64::INFINITY), 1.0);
         // And a sane one is left alone.
         assert_eq!(clamp_zoom(1.25), 1.25);
+    }
+
+    #[test]
+    fn problem_thresholds_default_to_two_minutes_and_five_restarts() {
+        let settings = parse(r#"{"theme":"dark"}"#);
+        assert_eq!(settings.problems.grace_period_seconds, 120);
+        assert_eq!(settings.problems.restart_threshold, 5);
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(json["problems"]["gracePeriodSeconds"], 120);
+        assert_eq!(json["problems"]["restartThreshold"], 5);
+    }
+
+    #[test]
+    fn problem_thresholds_can_be_set_in_part() {
+        let settings = parse(r#"{"problems":{"restartThreshold":10}}"#);
+        assert_eq!(settings.problems.restart_threshold, 10);
+        assert_eq!(settings.problems.grace_period_seconds, 120);
+        assert_eq!(settings.problems.thresholds().restart_threshold, 10);
+        assert_eq!(
+            parse(r#"{"problems":{"restartThreshold":0}}"#)
+                .problems
+                .thresholds()
+                .restart_threshold,
+            1
+        );
     }
 
     #[test]
