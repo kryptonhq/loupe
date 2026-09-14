@@ -844,7 +844,7 @@ fn an_event_with_no_subject_cannot_be_opened_and_uses_series_counts() {
         "involvedObject": {},
         "type": "Warning",
         "reason": "Mystery",
-        "series": { "count": 7, "lastObservedTime": format!("{}", at(20).replace('Z', ".000000Z")) }
+        "series": { "count": 7, "lastObservedTime": at(20).replace('Z', ".000000Z") }
     }));
     let rows = run(|s| s.events = vec![&e]);
     assert!(rows[0].target.is_none());
