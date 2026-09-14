@@ -12,6 +12,18 @@ This file starts at 0.1.5. Earlier releases are on the
 
 ### Added
 
+- **Problems.** One view of everything currently broken across the
+  cluster, so "is anything wrong?" has a one-glance answer after
+  connecting. Crash loops with their exit codes, images that cannot be
+  pulled, pods the scheduler cannot place and why, OOM kills, workloads
+  short of replicas, failed Jobs and CronJobs, unready or pressured
+  nodes, taints blocking pending pods, unbound claims, and the last
+  hour's warning events — forty identical ones as one row with a count.
+  Kept current by watches rather than polling, counted in the status
+  bar, and honest about RBAC: a category you may not list says so
+  instead of looking healthy. Grace period and restart threshold are in
+  `settings.json`.
+
 - **Signed Linux downloads.** The `.AppImage`, `.deb` and `.rpm` each
   carry a detached GPG signature, so a download can be checked with
   `gpg --verify` against a published key rather than trusted because of

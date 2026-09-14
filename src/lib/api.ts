@@ -447,6 +447,68 @@ export type WatchEvent =
   /// updating is worse than one that says it has.
   | { kind: "failed"; message: string };
 
+/// How bad a row in the Problems view is.
+export type Severity = "critical" | "warning" | "info";
+
+export type ProblemCategory = "pods" | "workloads" | "nodes" | "events" | "storage";
+
+/// The object a problem is about, in the shape a route is built from.
+export interface ProblemTarget {
+  group: string;
+  version: string;
+  kind: string;
+  namespace: string | null;
+  name: string;
+}
+
+export interface Problem {
+  /// Stable across snapshots; rows are keyed on it.
+  id: string;
+  severity: Severity;
+  category: ProblemCategory;
+  /// Null only for a row standing in for a source Loupe could not check.
+  target: ProblemTarget | null;
+  /// A short stable code — `CrashLoopBackOff`, `NotPermitted`.
+  reason: string;
+  /// The same thing as a sentence.
+  message: string;
+  /// When it started, in epoch seconds, as best the API can say.
+  since: number | null;
+  /// How many times, for deduplicated events.
+  count: number | null;
+}
+
+export type ProblemSource =
+  | "pods"
+  | "deployments"
+  | "statefulSets"
+  | "daemonSets"
+  | "jobs"
+  | "cronJobs"
+  | "nodes"
+  | "events"
+  | "persistentVolumeClaims";
+
+export type SourceStatus = {
+  source: ProblemSource;
+  category: ProblemCategory;
+} & (
+  | { state: "loading" }
+  | { state: "ready" }
+  /// RBAC refused the list. Terminal.
+  | { state: "forbidden"; message: string }
+  | { state: "failed"; message: string }
+);
+
+export interface ProblemsSnapshot {
+  problems: Problem[];
+  sources: SourceStatus[];
+  /// Epoch seconds on the Rust side's clock.
+  generatedAt: number;
+  graceSeconds: number;
+  restartThreshold: number;
+}
+
 /// What a forward points at. A Service target survives a rollout: the
 /// pod is resolved per connection, so the next one picks a live pod.
 export type ForwardTarget =
@@ -626,6 +688,13 @@ export const api = {
     channel: Channel<WatchEvent>,
   ) => invoke<number>("start_watch", { resource, namespace, channel }),
   stopWatch: (id: number) => invoke<boolean>("stop_watch", { id }),
+
+  /// Keeps the Problems view current. A snapshot arrives on `channel`
+  /// whenever the answer may have changed; resolves with the id that
+  /// stops it.
+  startProblems: (channel: Channel<ProblemsSnapshot>) =>
+    invoke<number>("start_problems", { channel }),
+  stopProblems: (id: number) => invoke<boolean>("stop_problems", { id }),
 
   /// Starts forwarding a local port into the cluster. Rejects when the
   /// local port is taken, before the forward is listed.

@@ -21,7 +21,7 @@ import type { Route } from "../lib/routes";
 // that read well all use colour to make the left rail scannable — you
 // learn the shape and stop reading the label.
 type Item = {
-  id: "nodes" | "namespaces" | "pods" | "helm";
+  id: "problems" | "nodes" | "namespaces" | "pods" | "helm";
   label: string;
   tint: string;
   glyph: string;
@@ -35,6 +35,8 @@ const CLUSTER_ITEMS: Item[] = [
 
 const HELM: Item = { id: "helm", label: "Helm", tint: "text-info", glyph: "⎈" };
 
+const PROBLEMS: Item = { id: "problems", label: "Problems", tint: "text-danger", glyph: "⚠" };
+
 const CRD_MARK = { tint: "text-warn", glyph: "❖" };
 
 interface SidebarProps {
@@ -43,6 +45,9 @@ interface SidebarProps {
   onSelect: (route: Route) => void;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  /// Critical and warning rows, for the count beside Problems. Null
+  /// before the first answer, so the rail does not claim zero early.
+  problemCount?: number | null;
 }
 
 /// The kind a `kind` route is showing, or null for anything else.
@@ -97,10 +102,12 @@ function NavItem({
   item,
   active,
   onSelect,
+  count,
 }: {
   item: Item;
   active: boolean;
   onSelect: () => void;
+  count?: number | null;
 }) {
   return (
     <button onClick={onSelect} className={itemClass(active)}>
@@ -111,6 +118,11 @@ function NavItem({
         {item.glyph}
       </span>
       {item.label}
+      {count != null && count > 0 && (
+        <span className="ml-auto rounded-sm bg-danger/[0.12] px-1.5 text-2xs font-medium tabular-nums text-danger">
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -243,6 +255,7 @@ export function Sidebar({
   onSelect,
   theme,
   onThemeChange,
+  problemCount = null,
 }: SidebarProps) {
   const selectedId = selectedKindId(route);
 
@@ -261,6 +274,16 @@ export function Sidebar({
       {/* Scrolls: between the fixed sections and whatever CRDs the
           cluster has, this list is not a fixed height. */}
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {/* Above everything else: the first question after connecting. */}
+        <div className="pt-1">
+          <NavItem
+            item={PROBLEMS}
+            active={route.type === "problems"}
+            onSelect={() => onSelect({ type: "problems" })}
+            count={problemCount}
+          />
+        </div>
+
         <SectionLabel>Cluster</SectionLabel>
         {CLUSTER_ITEMS.map((item) => (
           <NavItem

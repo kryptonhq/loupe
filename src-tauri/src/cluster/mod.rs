@@ -16,6 +16,7 @@ pub mod exec;
 pub mod forward;
 pub mod helm;
 pub mod logs;
+pub mod problems;
 pub mod related;
 pub mod resources;
 pub mod table;

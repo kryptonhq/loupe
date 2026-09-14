@@ -3,7 +3,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
-import { api } from "./lib/api";
+import { act } from "@testing-library/react";
+import { api, type ProblemsSnapshot } from "./lib/api";
 
 // The shell: which screen is showing, and what happens to cached data
 // when the cluster underneath it changes. The cache is the interesting
@@ -22,6 +23,8 @@ vi.mock("./lib/api", async (original) => {
     api: {
       ...actual.api,
       startWatch: vi.fn().mockResolvedValue(1),
+      startProblems: vi.fn(),
+      stopProblems: vi.fn().mockResolvedValue(true),
       stopWatch: vi.fn().mockResolvedValue(true),
       getPod: vi.fn(),
       getObject: vi.fn(),
@@ -53,6 +56,10 @@ const setTheme = vi.mocked(api.setTheme);
 const disconnect = vi.mocked(api.disconnect);
 const listContexts = vi.mocked(api.listContexts);
 const listNodes = vi.mocked(api.listNodes);
+
+/// The window's one Problems subscription, so a test can push a snapshot
+/// down it the way the Rust monitor would.
+let problemsChannel: { onmessage?: (s: ProblemsSnapshot) => void } | null = null;
 
 const CLUSTER = {
   context: "orbstack",
@@ -92,6 +99,11 @@ beforeEach(() => {
   });
 
   currentCluster.mockResolvedValue(CLUSTER);
+  problemsChannel = null;
+  vi.mocked(api.startProblems).mockImplementation(async (channel) => {
+    problemsChannel = channel as never;
+    return 7;
+  });
   getSettings.mockResolvedValue({ theme: "system", recentContexts: [], pinnedContexts: [], zoom: 1 });
   setTheme.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [], zoom: 1 });
   disconnect.mockResolvedValue(undefined);
@@ -745,5 +757,82 @@ describe("App theme", () => {
     getSettings.mockResolvedValue({ theme: "dark", recentContexts: [], pinnedContexts: [], zoom: 1 });
     renderApp();
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
+  });
+});
+
+describe("App problems", () => {
+  const snapshot: ProblemsSnapshot = {
+    generatedAt: 1_000,
+    graceSeconds: 120,
+    restartThreshold: 5,
+    sources: [{ source: "pods", category: "pods", state: "ready" }],
+    problems: [
+      {
+        id: "Pod/prod/web-abc/CrashLoopBackOff/app",
+        severity: "critical",
+        category: "pods",
+        target: { group: "", version: "v1", kind: "Pod", namespace: "prod", name: "web-abc" },
+        reason: "CrashLoopBackOff",
+        message: "Container `app` is crash-looping",
+        since: 400,
+        count: null,
+      },
+      {
+        id: "Pod/prod/web-abc/Event:BackOff/",
+        severity: "info",
+        category: "events",
+        target: { group: "", version: "v1", kind: "Pod", namespace: "prod", name: "web-abc" },
+        reason: "BackOff",
+        message: "Back-off restarting failed container",
+        since: 990,
+        count: 12,
+      },
+    ],
+  };
+
+  async function withSnapshot() {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await waitFor(() => expect(problemsChannel).not.toBeNull());
+    act(() => problemsChannel?.onmessage?.(snapshot));
+    return user;
+  }
+
+  it("counts what is broken in the status bar and the rail, and opens the view from either", async () => {
+    const user = await withSnapshot();
+
+    // Info rows are listed but not counted.
+    const badge = await screen.findByRole("button", { name: "1 problem" });
+    await user.click(badge);
+    expect(await screen.findByRole("heading", { name: "Problems" })).toBeInTheDocument();
+    expect(screen.getByText("CrashLoopBackOff")).toBeInTheDocument();
+    expect(screen.getByText("×12")).toBeInTheDocument();
+  });
+
+  it("opens the object a row is about, and comes back to the view", async () => {
+    const user = await withSnapshot();
+    await user.click(await screen.findByRole("button", { name: /^Problems/ }));
+    await user.click(await screen.findByText("CrashLoopBackOff"));
+
+    expect(await screen.findByRole("heading", { name: "web-abc" })).toBeInTheDocument();
+    // `[[` is user-event's escape for a literal bracket.
+    await user.keyboard("{Meta>}[[{/Meta}");
+    expect(await screen.findByRole("heading", { name: "Problems" })).toBeInTheDocument();
+  });
+
+  it("is reachable from the palette", async () => {
+    const user = await withSnapshot();
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "failing");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "Problems" })).toBeInTheDocument();
+  });
+
+  it("stops the monitor when leaving the cluster", async () => {
+    await withSnapshot();
+    // One subscription for the whole window, not one per surface.
+    expect(api.startProblems).toHaveBeenCalledTimes(1);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(api.stopProblems).toHaveBeenCalledWith(7));
   });
 });

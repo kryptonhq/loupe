@@ -491,6 +491,137 @@ const FIXTURES: Record<string, unknown> = {
   start_pod_logs: 1,
 };
 
+/// A Problems snapshot with one of everything the monitor can say,
+/// including a source RBAC refused — so the view can be laid out and
+/// screenshotted without breaking a cluster on purpose.
+export function demoProblems(now = Math.floor(Date.now() / 1000)) {
+  const pod = (name: string, namespace = "shop") => ({
+    group: "",
+    version: "v1",
+    kind: "Pod",
+    namespace,
+    name,
+  });
+  const source = (s: string, category: string, state = "ready") => ({
+    source: s,
+    category,
+    state,
+  });
+  return {
+    generatedAt: now,
+    graceSeconds: 120,
+    restartThreshold: 5,
+    sources: [
+      source("pods", "pods"),
+      source("deployments", "workloads"),
+      source("statefulSets", "workloads"),
+      source("daemonSets", "workloads"),
+      source("jobs", "workloads"),
+      source("cronJobs", "workloads"),
+      {
+        ...source("nodes", "nodes", "forbidden"),
+        message: 'nodes is forbidden: User "dev" cannot list resource "nodes"',
+      },
+      source("events", "events"),
+      source("persistentVolumeClaims", "storage"),
+    ],
+    problems: [
+      {
+        id: "Pod/shop/checkout-7f9c-x2k/CrashLoopBackOff/app",
+        severity: "critical",
+        category: "pods",
+        target: pod("checkout-7f9c-x2k"),
+        reason: "CrashLoopBackOff",
+        message: "Container `app` is crash-looping: last exit code 1 (Error), 14 restarts",
+        since: now - 2_460,
+        count: null,
+      },
+      {
+        id: "Pod/shop/web-5d8b-q7p/ImagePullBackOff/web",
+        severity: "critical",
+        category: "pods",
+        target: pod("web-5d8b-q7p"),
+        reason: "ImagePullBackOff",
+        message:
+          "Cannot pull image `registry.example.com/shop/web:v2.4.0-rc` for container `web`: Back-off pulling image",
+        since: now - 540,
+        count: null,
+      },
+      {
+        id: "Deployment/shop/web/ReplicasUnavailable/",
+        severity: "critical",
+        category: "workloads",
+        target: { group: "apps", version: "v1", kind: "Deployment", namespace: "shop", name: "web" },
+        reason: "ReplicasUnavailable",
+        message: "0 of 2 replicas available for 9m",
+        since: now - 540,
+        count: null,
+      },
+      {
+        id: "Pod/ml/trainer-0/Unschedulable/",
+        severity: "warning",
+        category: "pods",
+        target: pod("trainer-0", "ml"),
+        reason: "Unschedulable",
+        message:
+          "Cannot be scheduled: 0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
+        since: now - 1_320,
+        count: null,
+      },
+      {
+        id: "CronJob/ops/nightly-backup/LastRunFailed/",
+        severity: "warning",
+        category: "workloads",
+        target: { group: "batch", version: "v1", kind: "CronJob", namespace: "ops", name: "nightly-backup" },
+        reason: "LastRunFailed",
+        message: "Last run `nightly-backup-29311140` failed (BackoffLimitExceeded)",
+        since: now - 18_000,
+        count: null,
+      },
+      {
+        id: "Pod/agents/mcp-hello-0/OOMKilled/model",
+        severity: "warning",
+        category: "pods",
+        target: pod("mcp-hello-0", "agents"),
+        reason: "OOMKilled",
+        message: "Container `model` was killed for exceeding its memory limit (3 restarts)",
+        since: now - 780,
+        count: null,
+      },
+      {
+        id: "PersistentVolumeClaim/shop/data-db-2/ClaimPending/",
+        severity: "warning",
+        category: "storage",
+        target: { group: "", version: "v1", kind: "PersistentVolumeClaim", namespace: "shop", name: "data-db-2" },
+        reason: "ClaimPending",
+        message: "Claim has not been bound for 42m (storage class `fast-ssd`)",
+        since: now - 2_520,
+        count: null,
+      },
+      {
+        id: "Pod/ml/trainer-0/Event:FailedScheduling/",
+        severity: "info",
+        category: "events",
+        target: pod("trainer-0", "ml"),
+        reason: "FailedScheduling",
+        message: "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
+        since: now - 45,
+        count: 40,
+      },
+      {
+        id: "source/nodes/NotPermitted",
+        severity: "info",
+        category: "nodes",
+        target: null,
+        reason: "NotPermitted",
+        message: "Not permitted to list nodes across the cluster, so they were not checked",
+        since: null,
+        count: null,
+      },
+    ],
+  };
+}
+
 export function installDemoBridge() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__TAURI_INTERNALS__ = {
@@ -556,6 +687,18 @@ export function installDemoBridge() {
           })),
         });
       }
+      // The monitor pushes snapshots on a channel rather than returning
+      // one. With `transformCallback` above returning the callback
+      // itself, the channel's id *is* its receiver.
+      if (cmd === "start_problems") {
+        const channel = args.channel as { id?: unknown } | undefined;
+        const deliver = channel?.id;
+        if (typeof deliver === "function") {
+          setTimeout(() => deliver({ index: 0, message: demoProblems() }), 300);
+        }
+        return Promise.resolve(1);
+      }
+      if (cmd === "stop_problems") return Promise.resolve(true);
       if (cmd === "apply_yaml") {
         return Promise.resolve({
           yaml: String(args.yaml ?? ""),
