@@ -302,15 +302,53 @@ jobs:
           args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
           uploadUpdaterJson: ${{ steps.updater.outputs.enabled }}
 
+      # Detached GPG signatures for the three Linux formats, made after
+      # tauri-action has uploaded them and without touching their bytes —
+      # the AppImage's updater signature is over those exact bytes.
+      #
+      # What switches this on is the public key being committed, not the
+      # secret being set. Once packaging/linux/loupe-release.asc is in the
+      # repository, users have been told to expect signatures, so a
+      # missing or wrong secret fails the job and `publish` never runs.
+      # Before then the step explains itself and does nothing.
+      - name: Sign Linux installers
+        if: startsWith(matrix.os, 'ubuntu')
+        env:
+          LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+          LINUX_SIGNING_KEY_PASSPHRASE: ${{ secrets.LINUX_SIGNING_KEY_PASSPHRASE }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if [ ! -f packaging/linux/loupe-release.asc ]; then
+            echo "::notice::packaging/linux/loupe-release.asc is not committed — Linux installers are unsigned. See RELEASING.md."
+            exit 0
+          fi
+          mapfile -t signatures < <(scripts/sign-linux-artifacts.sh src-tauri/target/release/bundle)
+          gh release upload "$TAG" "${signatures[@]}" --clobber
+        shell: bash
+
   publish:
     name: Publish
     needs: [version, draft, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - id: linux
+        run: |
+          if [ -f packaging/linux/loupe-release.asc ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RELEASE_ID: ${{ needs.draft.outputs.release_id }}
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          LINUX_SIGNED: ${{ steps.linux.outputs.signed }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -323,7 +361,7 @@ jobs:
             // Publishing a release that is missing a platform is worse
             // than failing here: the tag looks complete and the gap is
             // only found by whoever tried to download it.
-            const expected = [/\.dmg$/, /\.AppImage$/, /\.deb$/, /-setup\.exe$/, /\.msi$/];
+            const expected = [/\.dmg$/, /\.AppImage$/, /\.deb$/, /\.rpm$/, /-setup\.exe$/, /\.msi$/];
 
             // Only once updates are being signed. Without the key the
             // release is installers-only by design, and demanding a
@@ -338,6 +376,19 @@ jobs:
             if (missing.length) {
               core.setFailed(`no asset matching: ${missing.join(", ")}`);
               return;
+            }
+
+            // Once the public key is published, every Linux installer
+            // needs its own signature beside it — checked pairwise, so
+            // a signature for the wrong file does not count.
+            if (process.env.LINUX_SIGNED === "true") {
+              const unsigned = names
+                .filter((n) => /\.(AppImage|deb|rpm)$/.test(n))
+                .filter((n) => !names.includes(`${n}.asc`));
+              if (unsigned.length) {
+                core.setFailed(`unsigned Linux installers: ${unsigned.join(", ")}`);
+                return;
+              }
             }
 
             await github.rest.repos.updateRelease({
