@@ -8,6 +8,16 @@ This file starts at 0.1.5. Earlier releases are on the
 [releases page](https://github.com/kryptonhq/loupe/releases); 0.1.3 and
 0.1.4 exist only as version bumps and were never published.
 
+## [Unreleased]
+
+### Added
+
+- **Signed Linux downloads.** The `.AppImage`, `.deb` and `.rpm` each
+  carry a detached GPG signature, so a download can be checked with
+  `gpg --verify` against a published key rather than trusted because of
+  where it came from. macOS was already signed and notarised; Windows
+  signing is planned, and SmartScreen will still warn until it lands.
+
 ## [0.1.5] — 2026-08-20
 
 The first release since 0.1.2, and a large one: everything below either

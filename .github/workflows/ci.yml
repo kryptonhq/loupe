@@ -86,6 +86,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 scripts/version.py
 
+  # The Linux signing path otherwise only runs on a tag, which is the
+  # worst time to learn it is broken. Throwaway keys, no secrets.
+  signing:
+    name: Linux signing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/test-sign-linux-artifacts.sh
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
@@ -167,7 +176,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [dco, version, rust, web]
+    needs: [dco, version, signing, rust, web]
     runs-on: ubuntu-latest
     steps:
       - name: Check results

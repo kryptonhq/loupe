@@ -27,3 +27,6 @@ lcov.info
 
 # Playwright MCP scratch output.
 .playwright-mcp/
+
+# GPG revocation certificates belong offline, never in the repository.
+*-revoke.asc

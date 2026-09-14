@@ -153,7 +153,76 @@ defined `APPLE_CERTIFICATE` as "there is a certificate to import", then
 fails on `security import` with nothing to import. The certificate
 variables therefore only exist when there is a certificate.
 
+### Linux
+
+The `.AppImage`, `.deb` and `.rpm` each get a detached, ASCII-armoured
+GPG signature beside them in the release — `Loupe_0.2.0_amd64.deb.asc`
+and so on. Users verify with the public key committed at
+[`packaging/linux/loupe-release.asc`](packaging/linux/) and published on
+the website.
+
+The signatures are detached rather than embedded on purpose.
+`rpmsign --addsign`, `dpkg-sig` and `appimagetool --sign` all rewrite the
+file, and by the time signing runs the installer is already uploaded and
+the AppImage already carries an updater signature over its exact bytes.
+
+**What turns it on is committing the public key**, not setting the
+secret. The key file is a promise to users that signatures exist, so
+from the moment it is in the repository:
+
+- the Linux build signs with `LINUX_SIGNING_KEY`, checks the secret is
+  the *same* key as the committed one (by fingerprint), and verifies
+  every signature against the committed key alone before uploading it;
+- a missing secret, a different key, or a missing format fails the job;
+- `publish` refuses to publish unless every `.AppImage`, `.deb` and
+  `.rpm` asset has a `.asc` of the same name beside it.
+
+Without the key file the step logs a notice and releases are unsigned,
+as before. `scripts/test-sign-linux-artifacts.sh` exercises all of this
+with throwaway keys on every pull request.
+
+Do not confuse the `.asc` files with the `.sig` files already in each
+release. Those are minisign signatures for the updater, made with a
+different key for a different verifier.
+
+#### The key ceremony
+
+Once, on a trusted machine:
+
+```bash
+export GNUPGHOME="$(mktemp -d)"
+gpg --quick-gen-key "Loupe Release Signing" ed25519 sign 3y
+FPR="$(gpg --with-colons --list-keys | awk -F: '$1=="fpr"{print $10; exit}')"
+
+gpg --armor --export "$FPR" > packaging/linux/loupe-release.asc
+gpg --armor --export-secret-keys "$FPR"   # -> LINUX_SIGNING_KEY
+gpg --gen-revoke "$FPR" > loupe-release-revoke.asc   # store offline
+```
+
+Then:
+
+1. Add `LINUX_SIGNING_KEY` (the armoured secret key) and
+   `LINUX_SIGNING_KEY_PASSPHRASE` as repository secrets.
+2. Back the secret key and the revocation certificate up offline.
+   Unlike the updater key, this one *can* be rotated — publish the new
+   public key, sign releases with it, and revoke the old — but every
+   user who pinned the old fingerprint has to be told.
+3. Put the fingerprint in `packaging/linux/README.md` and on the
+   website, then commit `loupe-release.asc`. Commit it last: it is the
+   switch.
+
+The key expires in three years by design. Extend it with
+`gpg --quick-set-expire` and re-export the public half before it does;
+an expired key makes `gpg --verify` warn on every release.
+
+There is no apt or yum repository, so there is no repository metadata to
+sign. If one is added, sign its `Release`/`repomd.xml` with this key.
+
 ### Windows
+
+Signing is planned and not done yet — tracked in
+[#53](https://github.com/kryptonhq/loupe/issues/53), which covers both
+the MSI and NSIS installers.
 
 Unsigned installers work, but SmartScreen warns until the binary has
 built up reputation — which for a low-volume download effectively means
