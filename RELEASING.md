@@ -220,8 +220,9 @@ sign. If one is added, sign its `Release`/`repomd.xml` with this key.
 
 ### Windows
 
-Signing is planned and not done yet — tracked in the Windows
-Authenticode issue, which covers both the MSI and NSIS installers.
+Signing is planned and not done yet — tracked in
+[#53](https://github.com/kryptonhq/loupe/issues/53), which covers both
+the MSI and NSIS installers.
 
 Unsigned installers work, but SmartScreen warns until the binary has
 built up reputation — which for a low-volume download effectively means

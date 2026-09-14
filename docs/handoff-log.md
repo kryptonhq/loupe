@@ -47,6 +47,7 @@ Branch `feat/linux-signing`; website branch `docs/loupe-linux-signing`.
   check.
 - **No `.deb` repository exists**, so there is no repository metadata to
   sign ("if any" in the criterion).
+- **Windows tracking issue:** kryptonhq/loupe#53.
 - **Updater verification** is unaffected by construction — no artifact
   byte changes — but is not re-proven until the next real release; the
   repo has no throwaway-tag path (RELEASING.md, "Testing on a throwaway
