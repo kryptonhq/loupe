@@ -64,47 +64,71 @@ fn well_known_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
 /// keeps the environment it was started with, plus the well-known dirs.
 #[cfg(unix)]
 pub fn inherit() {
-    let shell_env = match read_login_shell_env() {
-        Ok(vars) => vars,
-        Err(e) => {
-            eprintln!("[loupe] could not read the login shell's environment: {e}");
-            Vec::new()
-        }
-    };
+    let shell = std::env::var_os("SHELL")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OsString::from("/bin/zsh"));
+    let shell_env = read_login_shell_env(&shell, TIMEOUT).unwrap_or_else(|e| {
+        eprintln!("[loupe] could not read the login shell's environment: {e}");
+        Vec::new()
+    });
 
-    let mut shell_path = None;
-    for (key, value) in shell_env {
-        if key == "PATH" {
-            shell_path = Some(value);
-        } else if !IGNORED.contains(&key.as_str()) && std::env::var_os(&key).is_none() {
-            std::env::set_var(key, value);
-        }
-    }
-
-    let current = std::env::var("PATH").unwrap_or_default();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let extra: Vec<PathBuf> = well_known_dirs(home)
         .into_iter()
         .filter(|d| d.is_dir())
         .collect();
-    std::env::set_var("PATH", merge_path(shell_path.as_deref(), &current, &extra));
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let changes = plan(
+        shell_env,
+        |k| std::env::var_os(k).is_some(),
+        &current_path,
+        &extra,
+    );
+    for (key, value) in changes {
+        std::env::set_var(key, value);
+    }
 }
 
 #[cfg(not(unix))]
 pub fn inherit() {}
 
-#[cfg(unix)]
-fn read_login_shell_env() -> Result<Vec<(String, String)>, String> {
-    let shell = std::env::var_os("SHELL")
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| OsString::from("/bin/zsh"));
+/// What to set, given the shell's variables and what the process has.
+/// PATH is always rewritten as the merge; anything else only where the
+/// process was not given it, since an explicit value is the user's
+/// choice for this launch and the shell's is a default.
+fn plan(
+    shell_env: Vec<(String, String)>,
+    is_set: impl Fn(&str) -> bool,
+    current_path: &str,
+    extra: &[PathBuf],
+) -> Vec<(String, String)> {
+    let mut shell_path = None;
+    let mut changes = Vec::new();
+    for (key, value) in shell_env {
+        if key == "PATH" {
+            shell_path = Some(value);
+        } else if !IGNORED.contains(&key.as_str()) && !is_set(&key) {
+            changes.push((key, value));
+        }
+    }
+    changes.push((
+        "PATH".into(),
+        merge_path(shell_path.as_deref(), current_path, extra),
+    ));
+    changes
+}
 
+#[cfg(unix)]
+fn read_login_shell_env(
+    shell: &std::ffi::OsStr,
+    timeout: Duration,
+) -> Result<Vec<(String, String)>, String> {
     // `-l` for .zprofile / .profile, `-i` for .zshrc / .bashrc — PATH
     // is set in either depending on who wrote the dotfiles. `env` by
     // absolute path, so a shell function or alias named `env` cannot
     // change what comes back, and `-0` so values with newlines survive.
     let script = format!("printf '{START}'; /usr/bin/env -0; printf '{END}'");
-    let mut child = Command::new(&shell)
+    let mut child = Command::new(shell)
         .args(["-l", "-i", "-c", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -121,7 +145,7 @@ fn read_login_shell_env() -> Result<Vec<(String, String)>, String> {
         buf
     });
 
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -129,7 +153,7 @@ fn read_login_shell_env() -> Result<Vec<(String, String)>, String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("timed out after {}s", TIMEOUT.as_secs()));
+                return Err(format!("timed out after {:?}", timeout));
             }
             Err(e) => return Err(e.to_string()),
         }
@@ -229,12 +253,97 @@ mod tests {
         assert_eq!(merged, "/usr/bin:/bin:/usr/local/bin");
     }
 
+    fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn plan_fills_gaps_but_never_overrides_what_the_process_was_given() {
+        let shell = vars(&[
+            ("PATH", "/Users/me/.local/bin:/usr/bin"),
+            ("AWS_PROFILE", "from-shell"),
+            ("KUBECONFIG", "/Users/me/.kube/eks"),
+            ("SHLVL", "2"),
+            ("PWD", "/Users/me"),
+        ]);
+        let changes = plan(shell, |k| k == "AWS_PROFILE", "/usr/bin:/bin", &[]);
+        assert_eq!(
+            changes,
+            vars(&[
+                ("KUBECONFIG", "/Users/me/.kube/eks"),
+                ("PATH", "/Users/me/.local/bin:/usr/bin:/bin"),
+            ])
+        );
+    }
+
+    #[test]
+    fn plan_without_a_shell_still_sets_path() {
+        let changes = plan(
+            Vec::new(),
+            |_| false,
+            "/usr/bin",
+            &[PathBuf::from("/opt/homebrew/bin")],
+        );
+        assert_eq!(changes, vars(&[("PATH", "/usr/bin:/opt/homebrew/bin")]));
+    }
+
+    #[test]
+    fn well_known_dirs_include_the_users_own_bins() {
+        let dirs = well_known_dirs(Some(PathBuf::from("/Users/me")));
+        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(dirs.contains(&PathBuf::from("/Users/me/.local/bin")));
+        assert!(!well_known_dirs(None)
+            .iter()
+            .any(|d| d.starts_with("/Users")));
+    }
+
+    /// A stand-in for the user's shell: an executable script that ignores
+    /// the `-l -i -c` it is handed and does whatever the test needs.
+    #[cfg(unix)]
+    fn fake_shell(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("loupe-shell-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     #[cfg(unix)]
     #[test]
     fn reads_a_real_login_shell() {
         // The shell this test runs under; proves the flags and markers
         // survive a real startup, not just the parser.
-        let vars = read_login_shell_env().expect("login shell env");
+        let vars = read_login_shell_env("/bin/bash".as_ref(), TIMEOUT).expect("login shell env");
         assert!(vars.iter().any(|(k, v)| k == "PATH" && !v.is_empty()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_shell_is_an_error_not_a_panic() {
+        let err = read_login_shell_env("/nonexistent/shell".as_ref(), TIMEOUT).unwrap_err();
+        assert!(err.contains("/nonexistent/shell"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_that_hangs_is_killed_at_the_deadline() {
+        let shell = fake_shell("hangs", "exec sleep 30");
+        let started = Instant::now();
+        let err = read_login_shell_env(shell.as_os_str(), Duration::from_millis(200)).unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_that_never_runs_the_script_is_an_error() {
+        let shell = fake_shell("silent", "echo 'not an environment'");
+        let err = read_login_shell_env(shell.as_os_str(), TIMEOUT).unwrap_err();
+        assert!(err.contains("no environment"), "{err}");
     }
 }
