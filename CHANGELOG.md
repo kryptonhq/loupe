@@ -8,7 +8,7 @@ This file starts at 0.1.5. Earlier releases are on the
 [releases page](https://github.com/kryptonhq/loupe/releases); 0.1.3 and
 0.1.4 exist only as version bumps and were never published.
 
-## [Unreleased]
+## [0.1.6] — 2026-09-25
 
 ### Added
 
@@ -55,6 +55,13 @@ This file starts at 0.1.5. Earlier releases are on the
   `gpg --verify` against a published key rather than trusted because of
   where it came from. macOS was already signed and notarised; Windows
   signing is planned, and SmartScreen will still warn until it lands.
+
+### Security
+
+- **rustls 0.23.45**, for
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (medium). rustls carries every connection Loupe makes to a cluster
+  and to the update server.
 
 ## [0.1.5] — 2026-08-20
 
