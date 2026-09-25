@@ -26,6 +26,17 @@ pub const ZOOM_RESET: &str = "zoom-reset";
 /// The event the menu emits, carrying one of the ids above.
 pub const ZOOM_EVENT: &str = "menu:zoom";
 
+/// Loupe › Check for Updates…. Its own event rather than a zoom-style
+/// payload: there is nothing to carry, and `CHECK_UPDATES_EVENT` in
+/// update.ts listens for exactly this.
+///
+/// In the menu because the menu exists on every screen. The status bar
+/// and ⌘K only exist once a cluster is connected, so an app that could
+/// not connect — v0.1.5 against EKS — had no way to find the release
+/// that fixed it.
+pub const CHECK_UPDATES: &str = "check-updates";
+pub const CHECK_UPDATES_EVENT: &str = "menu:check-updates";
+
 /// Build and install the menu.
 ///
 /// Fallible, and deliberately not fatal at the call site: an accelerator
@@ -36,6 +47,10 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let zoom_in = MenuItem::with_id(app, ZOOM_IN, "Zoom In", true, Some("CmdOrCtrl+="))?;
     let zoom_out = MenuItem::with_id(app, ZOOM_OUT, "Zoom Out", true, Some("CmdOrCtrl+-"))?;
     let zoom_reset = MenuItem::with_id(app, ZOOM_RESET, "Actual Size", true, Some("CmdOrCtrl+0"))?;
+    // No accelerator: macOS apps do not give this one a shortcut, and
+    // every obvious chord is taken by something people use more.
+    let check_updates =
+        MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
 
     let app_menu = Submenu::with_items(
         app,
@@ -43,6 +58,8 @@ pub fn install<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         true,
         &[
             &PredefinedMenuItem::about(app, None, Some(AboutMetadata::default()))?,
+            // Where macOS apps put it, directly under About.
+            &check_updates,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, None)?,
             &PredefinedMenuItem::separator(app)?,

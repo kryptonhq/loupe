@@ -452,3 +452,43 @@ describe("ContextPicker with several clusters connected", () => {
     expect(await screen.findByText("prod")).toBeInTheDocument();
   });
 });
+
+// There is no status bar until something connects, so this is the only
+// place an update can show before then — and a release that fixes
+// connecting is exactly the one someone stuck on this screen needs.
+describe("ContextPicker updates", () => {
+  it("offers an update found on launch", async () => {
+    const onUpdate = vi.fn();
+    const { user } = renderPicker({
+      update: { status: "available", version: "0.1.7", notes: null },
+      onUpdate,
+    });
+    await screen.findByText("prod");
+
+    await user.click(screen.getByRole("button", { name: /Update to 0\.1\.7/ }));
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("offers a check when there is nothing to show", async () => {
+    const onCheckForUpdates = vi.fn();
+    const { user } = renderPicker({ onCheckForUpdates });
+    await screen.findByText("prod");
+
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(onCheckForUpdates).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the check with its answer", async () => {
+    renderPicker({ update: { status: "current" }, onCheckForUpdates: vi.fn() });
+    await screen.findByText("prod");
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loupe is up to date");
+    expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
+  });
+
+  it("offers no check when nothing could handle one", async () => {
+    renderPicker();
+    await screen.findByText("prod");
+    expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
+  });
+});

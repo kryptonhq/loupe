@@ -689,6 +689,9 @@ pub fn run() {
             if matches!(id, menu::ZOOM_IN | menu::ZOOM_OUT | menu::ZOOM_RESET) {
                 let _ = app.emit(menu::ZOOM_EVENT, id);
             }
+            if id == menu::CHECK_UPDATES {
+                let _ = app.emit(menu::CHECK_UPDATES_EVENT, ());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_contexts,

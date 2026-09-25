@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { act } from "@testing-library/react";
 import { api, type ProblemsSnapshot } from "./lib/api";
+import { check } from "@tauri-apps/plugin-updater";
+import { CHECK_UPDATES_EVENT } from "./lib/update";
 
 // The shell: which screen is showing, and what happens to cached data
 // when the cluster underneath it changes. The cache is the interesting
@@ -51,6 +53,20 @@ vi.mock("./lib/api", async (original) => {
 
 vi.mock("./lib/window", () => ({ dragRegionProps: {} }));
 
+/// The native menu's events, captured so a test can fire one the way
+/// menu.rs would. Hoisted because `vi.mock` is, and the factory runs as
+/// soon as App imports the event module.
+const menu = vi.hoisted(() => new Map<string, () => void>());
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (event: string, handler: () => void) => {
+    menu.set(event, handler);
+    return () => menu.delete(event);
+  }),
+}));
+
+// Nothing newer unless a test says otherwise.
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
+
 const currentCluster = vi.mocked(api.currentCluster);
 const getSettings = vi.mocked(api.getSettings);
 const setTheme = vi.mocked(api.setTheme);
@@ -86,6 +102,7 @@ function renderApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(check).mockResolvedValue(null);
   document.documentElement.style.removeProperty("zoom");
 
   // jsdom has no matchMedia, and the theme effect reads it on mount.
@@ -875,5 +892,99 @@ describe("App search", () => {
     expect(api.getPod).toHaveBeenCalledWith("prod", "web-abc");
     // Here, not in a new tab.
     expect(screen.getAllByRole("tab")).toHaveLength(1);
+  });
+});
+
+// Updates have to be reachable from the context picker. v0.1.5 only
+// offered them in the status bar and ⌘K, which exist once connected —
+// so the EKS users who could not connect could not find the release
+// that fixed it either.
+describe("App updates before connecting", () => {
+  beforeEach(() => {
+    currentCluster.mockResolvedValue(null);
+  });
+
+  function fireMenu() {
+    const handler = menu.get(CHECK_UPDATES_EVENT);
+    if (!handler) throw new Error("the app is not listening for the menu's check");
+    act(() => handler());
+  }
+
+  it("shows an update found on launch on the picker", async () => {
+    vi.mocked(check).mockResolvedValue({
+      version: "0.1.7",
+      body: null,
+      downloadAndInstall: vi.fn(),
+    } as never);
+    renderApp();
+    expect(
+      await screen.findByRole("button", { name: /Update to 0\.1\.7/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("answers the menu's check, then gets out of the way", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderApp();
+      await screen.findByRole("button", { name: "Check for updates" });
+
+      fireMenu();
+      expect(await screen.findByText("Loupe is up to date")).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.queryByText("Loupe is up to date")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Check for updates" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finds a release from the menu that launch missed", async () => {
+    renderApp();
+    await screen.findByRole("button", { name: "Check for updates" });
+
+    vi.mocked(check).mockResolvedValue({
+      version: "0.1.7",
+      body: null,
+      downloadAndInstall: vi.fn(),
+    } as never);
+    fireMenu();
+    expect(
+      await screen.findByRole("button", { name: /Update to 0\.1\.7/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("says a check failed, and asks again when clicked", async () => {
+    // Silent on launch, where offline is normal; not when asked.
+    vi.mocked(check).mockRejectedValue("Could not fetch a valid release JSON");
+    const user = renderApp();
+    await user.click(await screen.findByRole("button", { name: "Check for updates" }));
+
+    const failed = await screen.findByRole("button", { name: /Could not check for updates/ });
+    expect(failed).toHaveAttribute(
+      "title",
+      "Could not fetch a valid release JSON — click to try again",
+    );
+
+    vi.mocked(check).mockResolvedValue(null);
+    await user.click(failed);
+    expect(await screen.findByText("Loupe is up to date")).toBeInTheDocument();
+  });
+
+  it("does not throw away an update already found", async () => {
+    vi.mocked(check).mockResolvedValue({
+      version: "0.1.7",
+      body: null,
+      downloadAndInstall: vi.fn(),
+    } as never);
+    renderApp();
+    await screen.findByRole("button", { name: /Update to 0\.1\.7/ });
+    const calls = vi.mocked(check).mock.calls.length;
+
+    fireMenu();
+    expect(screen.getByRole("button", { name: /Update to 0\.1\.7/ })).toBeInTheDocument();
+    expect(vi.mocked(check).mock.calls.length).toBe(calls);
   });
 });

@@ -8,6 +8,24 @@ This file starts at 0.1.5. Earlier releases are on the
 [releases page](https://github.com/kryptonhq/loupe/releases); 0.1.3 and
 0.1.4 exist only as version bumps and were never published.
 
+## [Unreleased]
+
+### Added
+
+- **Loupe › Check for Updates…** in the macOS menu, and a "Check for
+  updates" link on the cluster picker on every platform. A check you
+  ask for always answers: a new version, "Loupe is up to date", or why
+  it could not tell. Updates found on launch now show on the picker
+  too — before, they only appeared in the status bar, which does not
+  exist until a cluster connects, so anyone who could not connect
+  could not find the release that fixed it.
+
+### Fixed
+
+- **`brew install` and `brew upgrade` failed under Homebrew 7** with
+  "Calling `depends_on macos: :catalina` is disabled". The cask now
+  declares `depends_on :macos` and drops the deprecated `verified:`.
+
 ## [0.1.6] — 2026-09-25
 
 ### Added

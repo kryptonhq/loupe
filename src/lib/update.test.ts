@@ -29,6 +29,9 @@ describe("percentOf", () => {
 describe("updateSummary", () => {
   const cases: [UpdateState, string | null][] = [
     [{ status: "idle" }, null],
+    [{ status: "checking" }, "Checking for updates…"],
+    [{ status: "current" }, "Loupe is up to date"],
+    [{ status: "unreachable", message: "offline" }, "Could not check for updates"],
     [{ status: "available", version: "0.1.6", notes: null }, "Update to 0.1.6"],
     [
       { status: "downloading", version: "0.1.6", percent: 40 },
@@ -66,6 +69,8 @@ describe("updateAction", () => {
     expect(updateAction({ status: "failed", version: "1", message: "x" })).toBe(
       "retry",
     );
+    // A check that could not be made is asked again, not installed.
+    expect(updateAction({ status: "unreachable", message: "x" })).toBe("recheck");
   });
 
   it("offers nothing mid-download, where a second click would do nothing", () => {
@@ -73,6 +78,8 @@ describe("updateAction", () => {
       updateAction({ status: "downloading", version: "1", percent: 10 }),
     ).toBeNull();
     expect(updateAction({ status: "idle" })).toBeNull();
+    expect(updateAction({ status: "checking" })).toBeNull();
+    expect(updateAction({ status: "current" })).toBeNull();
   });
 });
 
@@ -111,5 +118,63 @@ describe("checkForUpdate", () => {
     const found = await checkForUpdate();
     expect(found?.version).toBe("0.1.6");
     expect(found?.notes).toBe("Sortable columns.");
+  });
+});
+
+// The check the user asked for, from the menu or the context picker.
+// Unlike the one on launch it has to tell "nothing newer" apart from
+// "could not ask" — both are silence in the quiet form.
+describe("checkNow", () => {
+  it("says up to date when there is nothing newer", async () => {
+    vi.doMock("@tauri-apps/plugin-updater", () => ({
+      check: vi.fn().mockResolvedValue(null),
+    }));
+    const { checkNow } = await import("./update");
+    expect(await checkNow()).toEqual({ kind: "current" });
+  });
+
+  it("says why when the check could not be made", async () => {
+    vi.doMock("@tauri-apps/plugin-updater", () => ({
+      check: vi.fn().mockRejectedValue(new Error("network unreachable")),
+    }));
+    const { checkNow } = await import("./update");
+    expect(await checkNow()).toEqual({ kind: "failed", message: "network unreachable" });
+  });
+
+  it("keeps a rejection that is not an Error legible", async () => {
+    // The Tauri bridge rejects with plain strings.
+    vi.doMock("@tauri-apps/plugin-updater", () => ({
+      check: vi.fn().mockRejectedValue("Could not fetch a valid release JSON"),
+    }));
+    const { checkNow } = await import("./update");
+    expect(await checkNow()).toEqual({
+      kind: "failed",
+      message: "Could not fetch a valid release JSON",
+    });
+  });
+
+  it("hands back an update that downloads with progress", async () => {
+    const downloadAndInstall = vi.fn(async (onEvent) => {
+      onEvent({ event: "Started", data: { contentLength: 200 } });
+      onEvent({ event: "Progress", data: { chunkLength: 50 } });
+      onEvent({ event: "Progress", data: { chunkLength: 150 } });
+      onEvent({ event: "Finished" });
+    });
+    vi.doMock("@tauri-apps/plugin-updater", () => ({
+      check: vi.fn().mockResolvedValue({ version: "0.1.7", body: null, downloadAndInstall }),
+    }));
+    const { checkNow } = await import("./update");
+    const result = await checkNow();
+    if (result.kind !== "available") throw new Error(`expected an update, got ${result.kind}`);
+    expect(result.update.version).toBe("0.1.7");
+    expect(result.update.notes).toBeNull();
+
+    const progress: [number, number | null][] = [];
+    await result.update.download((done, total) => progress.push([done, total]));
+    expect(progress).toEqual([
+      [0, 200],
+      [50, 200],
+      [200, 200],
+    ]);
   });
 });
