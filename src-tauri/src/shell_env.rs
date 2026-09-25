@@ -302,15 +302,46 @@ mod tests {
 
     /// A stand-in for the user's shell: an executable script that ignores
     /// the `-l -i -c` it is handed and does whatever the test needs.
+    /// Removed, with its directory, when dropped.
     #[cfg(unix)]
-    fn fake_shell(name: &str, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("loupe-shell-env-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+    struct FakeShell {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl FakeShell {
+        fn new(name: &str, body: &str) -> Self {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            // Nanoseconds plus the name: `cargo test` runs these in
+            // parallel and a shared path would flake.
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            // Test scaffolding, and it executes what it writes, so the
+            // same care as settings.rs's TempDir and then some: a
+            // non-recursive create fails closed on a path something else
+            // got to first, and 0700 keeps anyone else from swapping the
+            // script between writing and running it.
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
+            let dir = std::env::temp_dir().join(format!("loupe-shell-env-{name}-{stamp}"));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&dir)
+                .expect("create scratch dir");
+            let path = dir.join("shell");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            FakeShell { dir, path }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for FakeShell {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     #[cfg(unix)]
@@ -332,9 +363,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_shell_that_hangs_is_killed_at_the_deadline() {
-        let shell = fake_shell("hangs", "exec sleep 30");
+        let shell = FakeShell::new("hangs", "exec sleep 30");
         let started = Instant::now();
-        let err = read_login_shell_env(shell.as_os_str(), Duration::from_millis(200)).unwrap_err();
+        let err =
+            read_login_shell_env(shell.path.as_os_str(), Duration::from_millis(200)).unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
@@ -342,8 +374,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_shell_that_never_runs_the_script_is_an_error() {
-        let shell = fake_shell("silent", "echo 'not an environment'");
-        let err = read_login_shell_env(shell.as_os_str(), TIMEOUT).unwrap_err();
+        let shell = FakeShell::new("silent", "echo 'not an environment'");
+        let err = read_login_shell_env(shell.path.as_os_str(), TIMEOUT).unwrap_err();
         assert!(err.contains("no environment"), "{err}");
     }
 }
