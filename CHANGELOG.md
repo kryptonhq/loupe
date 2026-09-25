@@ -35,6 +35,16 @@ This file starts at 0.1.5. Earlier releases are on the
 
 ### Fixed
 
+- **EKS, GKE and AKS contexts failed to connect** when Loupe was opened
+  from the Dock or Finder, with "auth error: unable to run auth exec: No
+  such file or directory" — while kubectl worked. Those kubeconfigs
+  authenticate by running a plugin such as `aws` or
+  `gke-gcloud-auth-plugin`, and an app launched by macOS gets only
+  `/usr/bin:/bin:/usr/sbin:/sbin`, not your shell's PATH. Loupe now reads
+  your login shell's environment at startup, so it finds the same
+  plugin kubectl does, and picks up `KUBECONFIG`, `AWS_PROFILE` and
+  friends when they are set there.
+
 - **Listing a kind with no objects** could fail with "invalid type: null,
   expected a sequence". The API server sends `rows: null` rather than an
   empty list for an empty kind — seen on `LimitRange` and
