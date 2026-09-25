@@ -14,6 +14,7 @@ mod fake_api;
 mod guard;
 mod menu;
 mod settings;
+mod shell_env;
 mod vibrancy;
 
 use cluster::{ClusterInfo, ContextInfo, SharedSession};
@@ -635,6 +636,12 @@ struct VibrancyState(bool);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, before any thread exists: an app opened from the Dock has
+    // launchd's bare PATH, and every EKS/GKE/AKS context authenticates by
+    // running a plugin (`aws`, `gke-gcloud-auth-plugin`) that lives
+    // outside it. See shell_env.rs.
+    shell_env::inherit();
+
     // One plugin, and it is worth saying why.
     //
     // `tauri-plugin-opener` came with the scaffold and was dropped: it
