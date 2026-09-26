@@ -13,9 +13,13 @@ name: security
 # stabilises.
 
 on:
+  # The docs site in website/ has its own lockfile and is none of the
+  # app's dependency surface.
   push:
     branches: [main]
+    paths-ignore: ["website/**"]
   pull_request:
+    paths-ignore: ["website/**"]
   schedule:
     # Monday morning UTC, before the Dependabot PRs land.
     - cron: "0 6 * * 1"

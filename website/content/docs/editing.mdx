@@ -1,0 +1,40 @@
+---
+title: Editing and actions
+description: YAML editing with a diff before every apply, operator actions behind confirmations, and per-context write guards.
+icon: SquarePen
+---
+
+![The manifest view with syntax highlighting](/img/loupe/pod-yaml.png)
+
+## YAML
+
+- The YAML view writes back with a full replace, so a concurrent
+  modification is rejected by the API server rather than silently
+  overwritten.
+- A diff is shown before every apply.
+
+## Actions
+
+Scale, rollout restart, delete, cordon and drain are available on the
+objects they apply to, each behind a confirmation — and hidden entirely
+where RBAC would refuse them, so a button you can see is one you can
+use.
+
+## Guards
+
+Each context carries a write guard, chosen from **Writes** in the
+status bar:
+
+| Setting | Guard | Effect |
+| --- | --- | --- |
+| **Allowed** | — | Writes go through after their normal confirmation. |
+| **Confirm each** | Protected | Every write is confirmed by typing the context's name. |
+| **Refused** | Read-only | Writes are refused outright. |
+
+The guard is stored per context, shown in the status bar, and tints
+it — so a production cluster does not look like a local one.
+
+<Callout>
+A guard is Loupe's own safeguard, not RBAC. It does not change what
+your credentials are allowed to do, only what Loupe will send.
+</Callout>

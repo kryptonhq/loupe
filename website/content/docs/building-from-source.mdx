@@ -1,0 +1,53 @@
+---
+title: Building from source
+description: Run Loupe from a checkout, work on the UI without a cluster, and contribute.
+icon: Hammer
+---
+
+Loupe needs Node 22, pnpm 10 and a stable Rust toolchain, plus
+[Tauri's system dependencies](https://tauri.app/start/prerequisites/)
+for your platform.
+
+```bash
+git clone https://github.com/kryptonhq/loupe
+cd loupe
+pnpm install
+pnpm tauri dev
+```
+
+`pnpm dev` alone serves the frontend in a browser, where the Tauri
+bridge is absent. In that case the UI falls back to the fixtures in
+`src/dev/fixtures.ts`, allowing layout work without a cluster. That
+path is development-only and is excluded from production builds.
+
+## Tests
+
+```bash
+pnpm test                         # frontend, vitest
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust core
+```
+
+## Contributing
+
+Loupe uses the [DCO](https://developercertificate.org/) rather than a
+CLA. Sign commits with `git commit -s`; contributors retain their
+copyright.
+
+- [CONTRIBUTING.md](https://github.com/kryptonhq/loupe/blob/main/CONTRIBUTING.md) — development setup and pull request process
+- [GOVERNANCE.md](https://github.com/kryptonhq/loupe/blob/main/GOVERNANCE.md) — decision-making and maintainership
+- [SECURITY.md](https://github.com/kryptonhq/loupe/blob/main/SECURITY.md) — vulnerability disclosure process
+
+The project follows the
+[CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
+
+## This site
+
+These docs live in the repository's
+[`website/`](https://github.com/kryptonhq/loupe/tree/main/website)
+folder. Every page has an edit link; see its README for how the site is
+built.
+
+## Licence
+
+Apache 2.0. See
+[LICENSE](https://github.com/kryptonhq/loupe/blob/main/LICENSE).

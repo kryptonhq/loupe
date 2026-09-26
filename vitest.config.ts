@@ -7,8 +7,9 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
-    // src-tauri holds Rust; its tests run under cargo.
-    exclude: ["node_modules/**", "src-tauri/**", "dist/**"],
+    // src-tauri holds Rust; its tests run under cargo. website/ is the
+    // docs site, a separate app with its own dependencies.
+    exclude: ["node_modules/**", "src-tauri/**", "dist/**", "website/**"],
     coverage: {
       provider: "v8",
       // lcov for Codecov, text for whoever is reading the terminal.

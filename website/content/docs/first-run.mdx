@@ -1,0 +1,48 @@
+---
+title: First run
+description: Pick a kubeconfig context, connect, and find your way around.
+icon: Rocket
+---
+
+<Steps>
+<Step>
+
+### Start Loupe
+
+It reads `~/.kube/config` — the same file `kubectl` uses — and lists
+every context it finds. If `KUBECONFIG` is set in your login shell,
+Loupe reads that instead, even when opened from the Dock or Finder.
+
+</Step>
+<Step>
+
+### Pick a context
+
+Loupe connects using that context's credentials. Whatever `kubectl` can
+see, Loupe can see; whatever RBAC forbids, Loupe cannot. Recent and
+pinned contexts sit at the top of the picker, and search stays instant
+on a kubeconfig with thousands of contexts.
+
+</Step>
+<Step>
+
+### Look around
+
+Loupe opens on the [dashboard](/docs/dashboard): a bird's-eye view of
+the cluster, where every number opens what is behind it. The rail on
+the left lists nodes, namespaces, pods and every other kind the API
+server serves; [`⌘K`](/docs/search) finds any object by name.
+
+</Step>
+</Steps>
+
+Connections are held per context, so switching cluster does not restart
+the application or discard the previous connection — switching back
+re-authenticates nothing and re-walks no API discovery.
+
+<Callout title="Something wrong before you can connect?">
+The cluster picker carries a **Check for updates** link, so a release
+that fixes a connection problem is reachable without connecting first.
+If an EKS, GKE or AKS context fails with `unable to run auth exec`, see
+[troubleshooting](/docs/troubleshooting#auth-plugin-not-found).
+</Callout>

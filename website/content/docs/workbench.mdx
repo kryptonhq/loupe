@@ -1,0 +1,62 @@
+---
+title: The workbench
+description: Tabs, per-tab history, breadcrumbs, the status bar, zoom and the command palette.
+icon: PanelsTopLeft
+---
+
+Loupe holds several pieces of work at once rather than one. Opening an
+object does not cost you the list it came from, and following a chain —
+a pod, its ReplicaSet, the Deployment above it — is reversible in both
+directions.
+
+![Two tabs open, with the trail showing the path to a pod](/img/loupe/tabs.png)
+
+## Tabs
+
+<kbd>⌘T</kbd> opens a tab on whatever is showing, <kbd>⌘W</kbd> closes
+it, and <kbd>⌘1</kbd>–<kbd>⌘9</kbd> reach one by position.
+<kbd>⌘</kbd>-clicking a row — or a number on the dashboard — opens it in
+a tab of its own.
+
+Each listing remembers its own namespace, search and sort, so drilling
+into a row and coming back returns the view as you left it — and two
+tabs on the same kind can be scoped to different namespaces.
+
+## Back and forward
+
+Every tab keeps its own history, walked with <kbd>⌘[</kbd> and
+<kbd>⌘]</kbd> or the arrows above the view.
+
+The breadcrumb above a detail view says where the object sits — kind,
+namespace, name — rather than replaying how you arrived. The namespace
+crumb opens that kind's listing scoped to the namespace: on
+*Deployments › shop › api*, **shop** opens Deployments filtered to
+`shop`.
+
+## Status bar
+
+One line at the foot of the window carries the cluster, its
+[write guard](/docs/editing#guards), the server version, the count of
+[problems](/docs/problems) and any pending [update](/docs/updates). It
+does not move as you navigate, and a protected or read-only guard tints
+it, so a production cluster does not look like a local one.
+
+## Command palette
+
+<kbd>⌘K</kbd> opens the palette. It runs commands — switch context,
+change theme, check for updates, open Problems — and
+[searches the whole cluster](/docs/search) for objects by name.
+<kbd>?</kbd> anywhere outside a text field lists every shortcut; see
+[keyboard shortcuts](/docs/keyboard-shortcuts).
+
+## Zoom
+
+<kbd>⌘+</kbd>, <kbd>⌘−</kbd> and <kbd>⌘0</kbd> scale the whole
+interface, from the keyboard, the View menu or the palette. The size is
+remembered across launches.
+
+## Appearance
+
+Light, dark, or following the system — from the switch at the foot of
+the rail or the palette, persisted in
+[`settings.json`](/docs/configuration).

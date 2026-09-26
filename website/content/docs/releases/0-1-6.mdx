@@ -1,0 +1,60 @@
+---
+title: Loupe 0.1.6
+description: Problems, cluster-wide search, signed Linux downloads, and EKS, GKE and AKS contexts that connect when opened from the Dock.
+---
+
+*Released 25 September 2026 —
+[on GitHub](https://github.com/kryptonhq/loupe/releases/tag/v0.1.6)*
+
+### Added
+
+- **Search the whole cluster from ⌘K.** Type part of a name and the
+  palette finds matching objects of every kind — custom resources
+  included — rather than only the rows a listing has loaded. Results are
+  grouped by kind with their namespace and status; Enter opens one here,
+  ⌘-Enter in a new tab. The index is built in the background from the
+  API server's own listings, holds names and not contents (Secrets by
+  name only), skips what RBAC does not allow and says how much that was,
+  and is thrown away when you switch cluster. See [Search](/docs/search).
+
+- **Problems.** One view of everything currently broken across the
+  cluster, so "is anything wrong?" has a one-glance answer after
+  connecting. Crash loops with their exit codes, images that cannot be
+  pulled, pods the scheduler cannot place and why, OOM kills, workloads
+  short of replicas, failed Jobs and CronJobs, unready or pressured
+  nodes, taints blocking pending pods, unbound claims, and the last
+  hour's warning events — forty identical ones as one row with a count.
+  Kept current by watches rather than polling, counted in the status
+  bar, and honest about RBAC: a category you may not list says so
+  instead of looking healthy. Grace period and restart threshold are in
+  `settings.json`. See [Problems](/docs/problems).
+
+### Fixed
+
+- **EKS, GKE and AKS contexts failed to connect** when Loupe was opened
+  from the Dock or Finder, with "auth error: unable to run auth exec: No
+  such file or directory" — while kubectl worked. Those kubeconfigs
+  authenticate by running a plugin such as `aws` or
+  `gke-gcloud-auth-plugin`, and an app launched by macOS gets only
+  `/usr/bin:/bin:/usr/sbin:/sbin`, not your shell's PATH. Loupe now reads
+  your login shell's environment at startup, so it finds the same
+  plugin kubectl does, and picks up `KUBECONFIG`, `AWS_PROFILE` and
+  friends when they are set there.
+
+- **Listing a kind with no objects** could fail with "invalid type: null,
+  expected a sequence". The API server sends `rows: null` rather than an
+  empty list for an empty kind — seen on `LimitRange` and
+  `CSIStorageCapacity` on a fresh cluster.
+
+- **Signed Linux downloads.** The `.AppImage`, `.deb` and `.rpm` each
+  carry a detached GPG signature, so a download can be checked with
+  `gpg --verify` against a published key rather than trusted because of
+  where it came from. See
+  [verifying a download](/docs/installation#verifying-a-download).
+
+### Security
+
+- **rustls 0.23.45**, for
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (medium). rustls carries every connection Loupe makes to a cluster
+  and to the update server.

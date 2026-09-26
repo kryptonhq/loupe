@@ -11,10 +11,14 @@ name: codeql
 # pull request, rather than being buried in a job log.
 
 on:
+  # The docs site in website/ is not the app; scanning it on every docs
+  # edit is noise. The weekly run still covers the whole tree.
   push:
     branches: [main]
+    paths-ignore: ["website/**"]
   pull_request:
     branches: [main]
+    paths-ignore: ["website/**"]
   schedule:
     # Offset from `security.yml` so a bad morning is not simultaneously
     # every check going red.

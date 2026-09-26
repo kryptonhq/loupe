@@ -1,0 +1,22 @@
+---
+title: Loupe 0.1.2
+description: Signed and notarised macOS builds, so the app opens on a double-click.
+---
+
+*Released 4 August 2026 —
+[on GitHub](https://github.com/kryptonhq/loupe/releases/tag/v0.1.2)*
+
+### Changed
+
+- **macOS builds are signed with a Developer ID and notarised**, with
+  the ticket stapled. The app opens on a double-click; there is nothing
+  to allow in System Settings.
+
+  Before this, releases were ad-hoc signed. Gatekeeper refused them for
+  the reason it actually was — no notarisation — and the user had to go
+  through **Privacy & Security → Open Anyway**. The Homebrew cask
+  documented that in its caveats, and deliberately did not strip the
+  quarantine attribute on the user's behalf.
+
+  Stapling matters as much as signing: approval no longer depends on the
+  machine being able to reach Apple.

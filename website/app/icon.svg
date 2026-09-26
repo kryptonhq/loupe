@@ -1,0 +1,39 @@
+<!-- Loupe — the aperture mark.
+     Six blades closing onto a hexagon: a lens iris, which is hexagonal
+     for much the same reason Krypton's mark is. The opening keeps that
+     family's pointy-top hexagon, so the lineage is carried by the shape
+     of the hole rather than by repeating the parent's badge — Loupe is
+     the thing you look through.
+
+     Set in a rounded square rather than on a disc. A circular aperture
+     inside a circular badge is two concentric rings saying the same
+     thing, and every platform this ships to draws app icons as squares
+     anyway — a disc floats inside them at the wrong optical size.
+
+     Nothing is drawn under 7 units, so the whole mark survives 16px.
+     What it replaced had a 1px lattice that was grey haze by 32px and
+     gone in a browser tab. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <mask id="aperture">
+    <rect width="200" height="200" fill="#000"/>
+    <circle cx="100" cy="100" r="68" fill="#fff"/>
+    <polygon points="100,60 134.64,80 134.64,120 100,140 65.36,120 65.36,80" fill="#000"/>
+  </mask>
+
+  <rect width="200" height="200" rx="46" ry="46" fill="#6366f1"/>
+  <rect width="200" height="200" fill="#ffffff" mask="url(#aperture)"/>
+
+  <!-- Blade seams, swept 20° off radial so the iris reads as closing
+       rather than as a plain spoked wheel. -->
+  <g stroke="#6366f1" stroke-width="7" stroke-linecap="round">
+    <line x1="100" y1="60" x2="123.26" y2="36.1"/>
+    <line x1="134.64" y1="80" x2="166.97" y2="88.19"/>
+    <line x1="134.64" y1="120" x2="143.71" y2="152.09"/>
+    <line x1="100" y1="140" x2="76.74" y2="163.9"/>
+    <line x1="65.36" y1="120" x2="33.03" y2="111.81"/>
+    <line x1="65.36" y1="80" x2="56.29" y2="47.91"/>
+  </g>
+
+  <!-- What the aperture is open on. -->
+  <circle cx="100" cy="100" r="11" fill="#ffffff"/>
+</svg>

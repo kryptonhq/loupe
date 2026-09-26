@@ -1,0 +1,40 @@
+---
+title: Search
+description: Find any object in the cluster from the command palette by a fragment of its name — custom resources included.
+icon: Search
+---
+
+<kbd>⌘K</kbd> finds any object in the cluster by a fragment of its
+name, not just the rows a listing has loaded. Results appear under the
+palette's commands, grouped by kind, each with its namespace and the
+status `kubectl get` would print. <kbd>Enter</kbd> opens one in the
+current tab and <kbd>⌘Enter</kbd> in a new one.
+
+## What is indexed
+
+- Every kind API discovery says can be listed is indexed, custom
+  resources included. A CRD installed after connecting is picked up
+  after the next discovery refresh.
+- Only names, namespaces, kinds and a status word are held, in memory.
+  Secrets are indexed by name only; their contents are never read into
+  the index. Events are not indexed.
+- Kinds your RBAC does not let you list are skipped, and the palette's
+  footer says how many — "3 kinds not permitted" — rather than implying
+  they were searched.
+
+## When it is built
+
+The index is built in the background when the palette is first opened,
+starting with pods, deployments, services, config maps and secrets. It
+never holds up typing: until indexing finishes, results come from what
+has been indexed so far, and the palette says so.
+
+The index belongs to the connected cluster. Switching context or
+disconnecting discards it, and each kind is listed again after five
+minutes, so results are at most that far behind.
+
+## Cost
+
+On a kind cluster with 5,519 objects across 63 kinds, the index was
+built in about 0.1 seconds and held roughly 0.4 MB; a 10,000-object
+index measures under 1 MB. Queries answered in a few milliseconds.
