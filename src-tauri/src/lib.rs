@@ -515,9 +515,18 @@ async fn start_watch(
     session: tauri::State<'_, SharedSession>,
     resource: cluster::discovery::GvkRef,
     namespace: Option<String>,
+    label_selector: Option<String>,
     channel: tauri::ipc::Channel<cluster::watch::WatchEvent>,
 ) -> Result<u64> {
-    cluster::watch::start(session.inner(), watches(), resource, namespace, channel).await
+    cluster::watch::start(
+        session.inner(),
+        watches(),
+        resource,
+        namespace,
+        label_selector,
+        channel,
+    )
+    .await
 }
 
 /// Stops a watch. False means it had already stopped by itself.
@@ -542,6 +551,15 @@ async fn start_problems(
 #[tauri::command]
 async fn stop_problems(id: u64) -> Result<bool> {
     Ok(problem_monitors().stop(id).await)
+}
+
+/// Live CPU and memory use per node, or why there is none — usually
+/// that metrics-server is not installed.
+#[tauri::command]
+async fn node_usage(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<cluster::metrics::UsageAnswer> {
+    cluster::metrics::node_usage(session.inner()).await
 }
 
 /// Finds objects of any kind by a fragment of their name, from an index
@@ -732,6 +750,7 @@ pub fn run() {
             stop_watch,
             start_problems,
             stop_problems,
+            node_usage,
             search_objects,
             start_forward,
             list_forwards,

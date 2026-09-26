@@ -32,6 +32,7 @@ export interface ListView {
 }
 
 export type Route =
+  | { type: "dashboard" }
   | { type: "problems"; view?: ListView }
   | { type: "nodes"; view?: ListView }
   | { type: "namespaces"; view?: ListView }
@@ -51,8 +52,10 @@ export type Route =
     };
 
 /// The route the app opens on, and what a new tab starts at when there
-/// is nothing better to copy.
-export const HOME: Route = { type: "nodes" };
+/// is nothing better to copy. The dashboard, because the first question
+/// after connecting is "how is this cluster doing" — which it answers,
+/// problems included, at a glance.
+export const HOME: Route = { type: "dashboard" };
 
 /// How something was opened. Holding ⌘ or Ctrl asks for a tab of its
 /// own, the way it does on a link, so a list can be fanned out into
@@ -104,6 +107,8 @@ export function routeKey(route: Route): string {
 /// crumbs and by the detail view's own header.
 export function routeLabel(route: Route): string {
   switch (route.type) {
+    case "dashboard":
+      return "Dashboard";
     case "problems":
       return "Problems";
     case "nodes":
@@ -227,6 +232,12 @@ export interface Crumb {
 ///
 /// So the crumbs are derived from the current route alone — its kind's
 /// listing, its namespace, and itself.
+///
+/// The namespace crumb is that same listing scoped to the namespace, not
+/// the namespace's own page. Standing on a Deployment, "Deployments ›
+/// payments" reads as "the Deployments in payments", and that is where
+/// the click is expected to land; the Namespace object is a different
+/// place, reached from the Namespaces listing.
 export function crumbsFor(route: Route): Crumb[] {
   const at = (r: Route, current: boolean): Crumb => ({
     label: routeLabel(r),
@@ -234,7 +245,11 @@ export function crumbsFor(route: Route): Crumb[] {
     route: current ? null : r,
   });
   const here = at(route, true);
-  const namespaceOf = (name: string) => at({ type: "namespace", name }, false);
+  const namespaceOf = (listing: Route, namespace: string): Crumb => ({
+    label: namespace,
+    title: `${routeLabel(listing)} in ${namespace}`,
+    route: withListView(listing, { namespace }),
+  });
 
   switch (route.type) {
     case "node":
@@ -244,17 +259,25 @@ export function crumbsFor(route: Route): Crumb[] {
       return [at({ type: "namespaces" }, false), here];
 
     case "pod":
-      return [at({ type: "pods" }, false), namespaceOf(route.namespace), here];
+      return [
+        at({ type: "pods" }, false),
+        namespaceOf({ type: "pods" }, route.namespace),
+        here,
+      ];
 
     case "release":
-      return [at({ type: "helm" }, false), namespaceOf(route.namespace), here];
+      return [
+        at({ type: "helm" }, false),
+        namespaceOf({ type: "helm" }, route.namespace),
+        here,
+      ];
 
     case "object": {
       const listing: Route = { type: "kind", entry: kindEntryFor(route.resource) };
       // Cluster-scoped objects have no namespace to sit in, and an empty
       // crumb between the kind and the name would only be noise.
       return route.namespace
-        ? [at(listing, false), namespaceOf(route.namespace), here]
+        ? [at(listing, false), namespaceOf(listing, route.namespace), here]
         : [at(listing, false), here];
     }
 

@@ -507,7 +507,70 @@ export interface ProblemsSnapshot {
   generatedAt: number;
   graceSeconds: number;
   restartThreshold: number;
+  /// The dashboard's counts, computed from the same watched store.
+  overview: Overview;
 }
+
+/// Cluster-wide counts for the dashboard. CPU is in cores and memory in
+/// bytes throughout; mirrors `cluster::overview::Overview`.
+export interface Overview {
+  nodes: { total: number; ready: number; cordoned: number };
+  pods: {
+    total: number;
+    running: number;
+    pending: number;
+    succeeded: number;
+    failed: number;
+    unknown: number;
+    /// Running by phase, but with a container in CrashLoopBackOff.
+    crashLooping: number;
+  };
+  /// Deployment, StatefulSet, DaemonSet, Job, CronJob — always all five.
+  workloads: WorkloadCount[];
+  capacity: {
+    cpuAllocatable: number;
+    memoryAllocatable: number;
+    cpuRequested: number;
+    memoryRequested: number;
+    podsAllocatable: number;
+    podsScheduled: number;
+  };
+  nodeRows: NodeRow[];
+  restarts: RestartRow[];
+  namespaces: { namespace: string; pods: number }[];
+  namespaceCount: number;
+  claims: { total: number; bound: number; pending: number; lost: number };
+}
+
+export interface WorkloadCount {
+  kind: string;
+  total: number;
+  healthy: number;
+}
+
+export interface NodeRow {
+  name: string;
+  ready: boolean;
+  cordoned: boolean;
+  cpuAllocatable: number;
+  memoryAllocatable: number;
+  cpuRequested: number;
+  memoryRequested: number;
+  pods: number;
+}
+
+export interface RestartRow {
+  namespace: string;
+  pod: string;
+  container: string;
+  restarts: number;
+  lastReason: string | null;
+}
+
+/// Live node usage from metrics-server, or why there is none.
+export type UsageAnswer =
+  | { state: "available"; nodes: { name: string; cpu: number; memory: number }[] }
+  | { state: "unavailable"; reason: string };
 
 /// One object found by cluster-wide search.
 export interface SearchHit {
@@ -710,7 +773,14 @@ export const api = {
     resource: GvkRef,
     namespace: string | null,
     channel: Channel<WatchEvent>,
-  ) => invoke<number>("start_watch", { resource, namespace, channel }),
+    labelSelector?: string,
+  ) =>
+    invoke<number>("start_watch", {
+      resource,
+      namespace,
+      labelSelector: labelSelector ?? null,
+      channel,
+    }),
   stopWatch: (id: number) => invoke<boolean>("stop_watch", { id }),
 
   /// Keeps the Problems view current. A snapshot arrives on `channel`
@@ -719,6 +789,10 @@ export const api = {
   startProblems: (channel: Channel<ProblemsSnapshot>) =>
     invoke<number>("start_problems", { channel }),
   stopProblems: (id: number) => invoke<boolean>("stop_problems", { id }),
+
+  /// Live CPU and memory per node. Resolves with the reason instead when
+  /// metrics-server is missing — that is an answer, not a failure.
+  nodeUsage: () => invoke<UsageAnswer>("node_usage"),
 
   /// Finds objects of any kind by a fragment of their name. Answers from
   /// the index as it stands and never waits on the cluster; an empty

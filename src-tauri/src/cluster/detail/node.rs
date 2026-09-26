@@ -159,7 +159,7 @@ pub(crate) fn format_memory(bytes: f64) -> String {
 /// a pod's effective claim is the larger of "the biggest init container"
 /// and "all app containers together" — not their sum. Getting this wrong
 /// overstates every pod that has an init container.
-fn pod_demand(
+pub(crate) fn pod_demand(
     pod: &Pod,
     field: fn(
         &k8s_openapi::api::core::v1::ResourceRequirements,

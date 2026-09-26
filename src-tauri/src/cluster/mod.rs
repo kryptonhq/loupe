@@ -16,6 +16,8 @@ pub mod exec;
 pub mod forward;
 pub mod helm;
 pub mod logs;
+pub mod metrics;
+pub mod overview;
 pub mod problems;
 pub mod related;
 pub mod resources;

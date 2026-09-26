@@ -301,8 +301,11 @@ describe("0.1.5 command arguments", () => {
     await api.startWatch(resource, "payments", channel);
     expect(lastCall()).toEqual({
       command: "start_watch",
-      args: { resource, namespace: "payments", channel },
+      args: { resource, namespace: "payments", labelSelector: null, channel },
     });
+
+    await api.startWatch(resource, null, channel, "owner=helm");
+    expect(lastCall().args).toMatchObject({ labelSelector: "owner=helm" });
 
     await api.stopWatch(2);
     expect(lastCall()).toEqual({ command: "stop_watch", args: { id: 2 } });

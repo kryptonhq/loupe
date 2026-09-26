@@ -20,11 +20,35 @@ This file starts at 0.1.5. Earlier releases are on the
   exist until a cluster connects, so anyone who could not connect
   could not find the release that fixed it.
 
+- **Dashboard.** Loupe now opens on a bird's-eye view of the cluster:
+  nodes ready and cordoned, pods by phase with crash loops called out,
+  workloads healthy by kind, and the Problems list as a widget. CPU and
+  memory show live usage when metrics-server is installed and fall back
+  to requests — saying so — when it is not; pod slots show how close the
+  cluster is to max-pods. Busiest nodes, the containers restarting most,
+  namespaces by pod count and volume-claim status round it out. Every
+  number opens what is behind it (⌘-click for a new tab). The counts ride
+  on the Problems monitor's snapshot, so the dashboard is live and costs
+  the cluster no extra listing; a source RBAC refuses says so on its
+  widget instead of showing zero.
+
 ### Fixed
 
 - **`brew install` and `brew upgrade` failed under Homebrew 7** with
   "Calling `depends_on macos: :catalina` is disabled". The cask now
   declares `depends_on :macos` and drops the deprecated `verified:`.
+
+- **Listings update by themselves again.** Pods, Nodes, Namespaces and
+  Helm had never been wired to a watch, so a crashing pod sat at Running
+  until you pressed refresh. And on a busy cluster the listings that did
+  watch could still freeze: each change cancelled the refetch already in
+  flight, so when changes came faster than a LIST returned, nothing ever
+  landed. A refetch now waits for the one in flight. Helm watches only
+  its own release Secrets.
+
+- **The namespace crumb goes to the listing, scoped.** On Deployments ›
+  olympify › olympify-api, "olympify" now opens Deployments filtered to
+  olympify rather than the Namespace's own page.
 
 ## [0.1.6] — 2026-09-25
 

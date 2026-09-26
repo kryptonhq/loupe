@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_OVERVIEW } from "./lib/dashboard";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -26,6 +27,7 @@ vi.mock("./lib/api", async (original) => {
       ...actual.api,
       startWatch: vi.fn().mockResolvedValue(1),
       startProblems: vi.fn(),
+      nodeUsage: vi.fn().mockResolvedValue({ state: "unavailable", reason: "not installed" }),
       stopProblems: vi.fn().mockResolvedValue(true),
       searchObjects: vi.fn(),
       stopWatch: vi.fn().mockResolvedValue(true),
@@ -87,6 +89,12 @@ const CLUSTER = {
 
 /// Tracks the QueryClient so a test can assert the cache was cleared.
 let client: QueryClient;
+
+/// The left rail. The dashboard repeats several of its destinations —
+/// a Problems tile, a Nodes tile — so a test that means the rail says so.
+function railOf(): HTMLElement {
+  return document.querySelector("aside") as HTMLElement;
+}
 
 function renderApp() {
   client = new QueryClient({
@@ -212,7 +220,7 @@ describe("App startup", () => {
     // A webview reload must not drop the user back to the picker: the
     // session lives on the Rust side and survives it.
     renderApp();
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.queryByText(/Choose a cluster/)).not.toBeInTheDocument();
   });
 
@@ -238,14 +246,14 @@ describe("App startup", () => {
     // dev. Neither is a reason to refuse to start.
     getSettings.mockRejectedValue(new Error("no bridge"));
     renderApp();
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 });
 
 describe("App navigation", () => {
   it("opens the view the sidebar asks for", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: /Helm/ }));
     await waitFor(() =>
@@ -264,19 +272,19 @@ describe("App workspace", () => {
     // crumbs are derived from the pod itself: its listing, its
     // namespace, its name. Where you have been is the arrows' job.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await openPod(user);
 
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
-    expect(within(crumbs).getByTitle(/Go to Pods/)).toBeInTheDocument();
-    expect(within(crumbs).getByTitle(/Go to Namespace prod/)).toBeInTheDocument();
+    expect(within(crumbs).getByTitle("Go to Pods")).toBeInTheDocument();
+    expect(within(crumbs).getByTitle("Go to Pods in prod")).toBeInTheDocument();
     expect(within(crumbs).queryByTitle(/Nodes/)).not.toBeInTheDocument();
   });
 
   it("goes back to the listing and forward to the object again", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
 
     await user.click(screen.getByRole("button", { name: "Back" }));
@@ -290,7 +298,7 @@ describe("App workspace", () => {
 
   it("goes back on Escape as well as on the arrow", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
 
     await user.keyboard("{Escape}");
@@ -299,18 +307,33 @@ describe("App workspace", () => {
 
   it("goes to the listing an object belongs to from its crumb", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
 
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
-    await user.click(within(crumbs).getByTitle(/Go to Pods/));
+    await user.click(within(crumbs).getByTitle("Go to Pods"));
 
     expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
   });
 
+  it("goes to the listing scoped to the namespace from its crumb", async () => {
+    // Not the Namespace's own page: "Pods › prod" reads as the pods in
+    // prod, so that is where the click lands.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Dashboard" });
+    await openPod(user);
+    vi.mocked(api.listPods).mockClear();
+
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    await user.click(within(crumbs).getByTitle("Go to Pods in prod"));
+
+    expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
+    await waitFor(() => expect(api.listPods).toHaveBeenCalledWith("prod"));
+  });
+
   it("hides the bar on a listing opened fresh, where it would only repeat the heading", async () => {
     renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     expect(
       screen.queryByRole("navigation", { name: "Breadcrumb" }),
     ).not.toBeInTheDocument();
@@ -318,7 +341,7 @@ describe("App workspace", () => {
 
   it("opens a row in its own tab when the modifier is held", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: /Pods/ }));
     const row = await screen.findByText("web-abc");
@@ -334,7 +357,7 @@ describe("App workspace", () => {
     // The point of a second tab: the first keeps its place, so going
     // back to it costs nothing.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
 
     await user.keyboard("{Meta>}t{/Meta}");
@@ -349,32 +372,32 @@ describe("App workspace", () => {
 
   it("closes a tab and shows its neighbour", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}t{/Meta}");
     expect(screen.getAllByRole("tab")).toHaveLength(2);
 
     await user.keyboard("{Meta>}w{/Meta}");
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
-    expect(screen.getByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 
   it("never leaves the window with no tab at all", async () => {
     // A window with nothing open has nowhere to render and nothing to
     // click, so the last tab resets rather than closing.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
 
     await user.keyboard("{Meta>}w{/Meta}");
 
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getAllByRole("tab")).toHaveLength(1);
   });
 
   it("reaches a tab by number", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
     await user.keyboard("{Meta>}t{/Meta}");
 
@@ -386,8 +409,8 @@ describe("App workspace", () => {
 
   it("names each tab after what it is showing", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
-    expect(screen.getByRole("tab")).toHaveTextContent("Nodes");
+    await screen.findByRole("heading", { name: "Dashboard" });
+    expect(screen.getByRole("tab")).toHaveTextContent("Dashboard");
 
     await openPod(user);
     expect(screen.getByRole("tab")).toHaveTextContent("web-abc");
@@ -435,7 +458,7 @@ describe("App workspace", () => {
     ]);
 
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: "Deployments" }));
     await user.click(await screen.findByText("web"));
@@ -460,7 +483,7 @@ describe("App workspace", () => {
     // moment you open a row from it — so drilling into a pod and pressing
     // back handed you every namespace again and a dropdown to re-pick.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: /Pods/ }));
     await screen.findByText("web-abc");
@@ -483,7 +506,7 @@ describe("App workspace", () => {
     // pushed, back would mean "undo my last keystroke" and walking out of
     // a listing would take one press per filter you had tried.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: /Pods/ }));
     await screen.findByText("web-abc");
@@ -491,14 +514,14 @@ describe("App workspace", () => {
     await waitFor(() => expect(api.listPods).toHaveBeenCalledWith("prod"));
 
     await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 
   it("gives each tab its own filter", async () => {
     // Two tabs on the same listing scoped to different namespaces is the
     // point of a tab being a piece of work rather than a bookmark.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("button", { name: /Pods/ }));
     await screen.findByText("web-abc");
@@ -517,7 +540,7 @@ describe("App workspace", () => {
     // Tabs name objects in the cluster being left. One pointing at a pod
     // that does not exist here is worse than starting clean.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await openPod(user);
     await user.keyboard("{Meta>}t{/Meta}");
     expect(screen.getAllByRole("tab")).toHaveLength(2);
@@ -526,7 +549,7 @@ describe("App workspace", () => {
     await user.click(await screen.findByText("orbstack"));
 
     await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
-    expect(screen.getByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 });
 
@@ -536,8 +559,8 @@ describe("App cluster changes", () => {
     // rather than clearing would let its rows flash on screen under the
     // new cluster's name.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
-    await waitFor(() => expect(listNodes).toHaveBeenCalled());
+    await screen.findByRole("heading", { name: "Dashboard" });
+    await waitFor(() => expect(api.nodeUsage).toHaveBeenCalled());
     expect(client.getQueryCache().getAll().length).toBeGreaterThan(0);
 
     await user.click(screen.getByTitle(/Click to switch cluster/));
@@ -548,7 +571,7 @@ describe("App cluster changes", () => {
 
   it("clears the cache on disconnect and returns to the picker", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await waitFor(() =>
       expect(client.getQueryCache().getAll().length).toBeGreaterThan(0),
     );
@@ -577,13 +600,13 @@ describe("App cluster changes", () => {
     // There is a session behind the picker in this case, unlike at
     // launch, so backing out has to be possible.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByTitle(/Click to switch cluster/));
     expect(await screen.findByText(/Switch to another cluster/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(await screen.findByRole("heading", { name: "Nodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
   });
 });
 
@@ -592,7 +615,7 @@ describe("App cluster changes", () => {
 describe("App command palette", () => {
   it("opens on the platform shortcut", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
@@ -600,7 +623,7 @@ describe("App command palette", () => {
 
   it("opens on Ctrl-K too", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Control>}k{/Control}");
     expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
@@ -608,7 +631,7 @@ describe("App command palette", () => {
 
   it("navigates to a kind without the mouse", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     await user.type(await screen.findByLabelText("Command"), "helm");
@@ -626,7 +649,7 @@ describe("App command palette", () => {
     ]);
 
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     await user.type(await screen.findByLabelText("Command"), "eks-prod");
@@ -637,7 +660,7 @@ describe("App command palette", () => {
 
   it("does not offer the cluster already connected", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     await user.type(await screen.findByLabelText("Command"), "orbstack");
@@ -648,7 +671,7 @@ describe("App command palette", () => {
 
   it("closes on a second press of the shortcut", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     await screen.findByRole("dialog", { name: "Command palette" });
@@ -664,7 +687,7 @@ describe("App command palette", () => {
   it("shows the shortcut sheet on ?", async () => {
     // A shortcut nobody can find is a shortcut nobody uses.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("?");
     expect(
@@ -675,9 +698,10 @@ describe("App command palette", () => {
   it("lets ? be typed into a filter rather than opening the sheet", async () => {
     // Otherwise no search box in the app can contain a question mark.
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
+    await user.click(within(railOf()).getByRole("button", { name: /^Nodes/ }));
 
-    await user.click(screen.getByPlaceholderText("Search…"));
+    await user.click(await screen.findByPlaceholderText("Search…"));
     await user.keyboard("?");
 
     expect(
@@ -692,7 +716,7 @@ describe("App command palette", () => {
 describe("App zoom", () => {
   it("scales the interface, and steps back to normal", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}={/Meta}");
     await waitFor(() =>
@@ -706,7 +730,7 @@ describe("App zoom", () => {
 
   it("shrinks as well as grows", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}-{/Meta}");
     await waitFor(() => expect(document.documentElement.style.zoom).toBe("0.9"));
@@ -727,7 +751,7 @@ describe("App zoom", () => {
 
   it("persists a size the moment it changes", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}={/Meta}");
     await waitFor(() => expect(api.setZoom).toHaveBeenCalledWith(1.1));
@@ -738,7 +762,7 @@ describe("App zoom", () => {
     // could not be written is still the one that was asked for.
     vi.mocked(api.setZoom).mockRejectedValue(new Error("disk full"));
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}={/Meta}");
     await waitFor(() =>
@@ -754,7 +778,7 @@ describe("App zoom", () => {
       zoom: 40,
     });
     renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     // Clamped to the largest step the layout has been looked at in.
     await waitFor(() => expect(document.documentElement.style.zoom).toBe("2"));
   });
@@ -763,7 +787,7 @@ describe("App zoom", () => {
 describe("App theme", () => {
   it("persists a chosen theme", async () => {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("radio", { name: "Dark" }));
     await waitFor(() => expect(setTheme).toHaveBeenCalledWith("dark"));
@@ -775,7 +799,7 @@ describe("App theme", () => {
     // written is still the one the user asked for.
     setTheme.mockRejectedValue(new Error("disk full"));
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.click(screen.getByRole("radio", { name: "Dark" }));
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
@@ -788,8 +812,49 @@ describe("App theme", () => {
   });
 });
 
+describe("App dashboard", () => {
+  it("opens on the dashboard, fed by the Problems snapshot", async () => {
+    renderApp();
+    await screen.findByRole("heading", { name: "Dashboard" });
+    await waitFor(() => expect(problemsChannel).not.toBeNull());
+    act(() =>
+      problemsChannel?.onmessage?.({
+        overview: {
+          ...EMPTY_OVERVIEW,
+          nodes: { total: 3, ready: 3, cordoned: 0 },
+        },
+        generatedAt: 1_000,
+        graceSeconds: 120,
+        restartThreshold: 5,
+        sources: [],
+        problems: [],
+      }),
+    );
+    expect(await screen.findByTitle("Open Nodes")).toHaveTextContent("All ready");
+    // One subscription feeds the dashboard, the rail and the status bar.
+    expect(api.startProblems).toHaveBeenCalledTimes(1);
+  });
+
+  it("comes back from the rail and from the palette", async () => {
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Dashboard" });
+
+    await user.click(within(railOf()).getByRole("button", { name: /^Pods/ }));
+    await screen.findByRole("heading", { name: "Pods" });
+    await user.click(within(railOf()).getByRole("button", { name: /^Dashboard/ }));
+    await screen.findByRole("heading", { name: "Dashboard" });
+
+    await user.click(within(railOf()).getByRole("button", { name: /^Pods/ }));
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.type(await screen.findByLabelText("Command"), "capacity");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+  });
+});
+
 describe("App problems", () => {
   const snapshot: ProblemsSnapshot = {
+    overview: EMPTY_OVERVIEW,
     generatedAt: 1_000,
     graceSeconds: 120,
     restartThreshold: 5,
@@ -820,7 +885,7 @@ describe("App problems", () => {
 
   async function withSnapshot() {
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
     await waitFor(() => expect(problemsChannel).not.toBeNull());
     act(() => problemsChannel?.onmessage?.(snapshot));
     return user;
@@ -839,7 +904,7 @@ describe("App problems", () => {
 
   it("opens the object a row is about, and comes back to the view", async () => {
     const user = await withSnapshot();
-    await user.click(await screen.findByRole("button", { name: /^Problems/ }));
+    await user.click(within(railOf()).getByRole("button", { name: /^Problems/ }));
     await user.click(await screen.findByText("CrashLoopBackOff"));
 
     expect(await screen.findByRole("heading", { name: "web-abc" })).toBeInTheDocument();
@@ -881,7 +946,7 @@ describe("App search", () => {
       approxBytes: 1,
     }));
     const user = renderApp();
-    await screen.findByRole("heading", { name: "Nodes" });
+    await screen.findByRole("heading", { name: "Dashboard" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     await user.type(await screen.findByLabelText("Command"), "web");

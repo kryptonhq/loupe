@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Problem, ProblemsSnapshot } from "./api";
+import { EMPTY_OVERVIEW } from "./dashboard";
 import {
   badgeCount,
   formatSeconds,
@@ -32,6 +33,7 @@ function snapshot(problems: Problem[], states: string[] = ["ready"]): ProblemsSn
     generatedAt: 1000,
     graceSeconds: 120,
     restartThreshold: 5,
+    overview: EMPTY_OVERVIEW,
   };
 }
 

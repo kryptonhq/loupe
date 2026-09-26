@@ -496,3 +496,49 @@ async fn a_forbidden_category_is_one_not_permitted_row_and_the_rest_still_work()
     let _ = namespaces.delete(&ns, &DeleteParams::default()).await;
     outcome.expect("scenario");
 }
+
+#[tokio::test]
+#[ignore = "requires a reachable cluster; set LOUPE_TEST_CONTEXT"]
+async fn the_snapshot_carries_the_dashboard_overview() {
+    // The dashboard costs nothing extra because its counts ride on this
+    // snapshot. Against any live cluster, once every source has listed,
+    // there is at least one node with allocatable CPU and the kube-system
+    // pods are counted.
+    let session = live::session().await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let monitors: &'static Monitors = Box::leak(Box::default());
+    let id = start(&session, monitors, Thresholds::default(), Tx(tx))
+        .await
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let overview = loop {
+        let snap = tokio::time::timeout_at(deadline.into(), rx.recv())
+            .await
+            .expect("no snapshot with every source listed")
+            .unwrap();
+        if snap.sources.iter().all(|s| s.state == SourceState::Ready) {
+            break snap.overview;
+        }
+    };
+    monitors.stop(id).await;
+
+    println!("{overview:#?}");
+    assert!(overview.nodes.total >= 1);
+    assert_eq!(overview.nodes.ready, overview.nodes.total);
+    assert!(overview.capacity.cpu_allocatable > 0.0);
+    assert!(overview.capacity.memory_allocatable > 0.0);
+    assert!(
+        overview.capacity.cpu_requested > 0.0,
+        "kube-system requests CPU"
+    );
+    assert!(overview.pods.running > 0);
+    assert!(overview
+        .namespaces
+        .iter()
+        .any(|n| n.namespace == "kube-system"));
+    assert!(overview
+        .workloads
+        .iter()
+        .any(|w| w.kind == "Deployment" && w.total >= 1));
+}
