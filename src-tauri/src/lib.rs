@@ -515,9 +515,18 @@ async fn start_watch(
     session: tauri::State<'_, SharedSession>,
     resource: cluster::discovery::GvkRef,
     namespace: Option<String>,
+    label_selector: Option<String>,
     channel: tauri::ipc::Channel<cluster::watch::WatchEvent>,
 ) -> Result<u64> {
-    cluster::watch::start(session.inner(), watches(), resource, namespace, channel).await
+    cluster::watch::start(
+        session.inner(),
+        watches(),
+        resource,
+        namespace,
+        label_selector,
+        channel,
+    )
+    .await
 }
 
 /// Stops a watch. False means it had already stopped by itself.

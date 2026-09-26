@@ -40,6 +40,10 @@ export function useWatch(
   namespace: string | null,
   queryKey: QueryKey,
   enabled = true,
+  /// Narrows the watch to objects carrying these labels, for a listing
+  /// built from a slice of a kind — Helm's release Secrets, say, which
+  /// would otherwise wake it for every Secret in the cluster.
+  labelSelector?: string,
 ): WatchState {
   const queryClient = useQueryClient();
   const [live, setLive] = useState(false);
@@ -58,14 +62,25 @@ export function useWatch(
     let id: number | null = null;
     setError(null);
 
+    const flush = () => {
+      timer.current = null;
+      if (cancelled) return;
+      // Never on top of a fetch already running. Invalidating cancels
+      // it, and on a busy cluster — changes every few hundred
+      // milliseconds, a LIST that takes longer than that — every
+      // refetch was cancelled by the next change and the listing never
+      // moved at all. The fetch in flight may have started before this
+      // change, so wait for it to land and then go again.
+      if (queryClient.isFetching({ queryKey: key.current }) > 0) {
+        timer.current = setTimeout(flush, COALESCE_MS);
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: key.current });
+    };
+
     const refetchSoon = () => {
       if (timer.current !== null) return;
-      timer.current = setTimeout(() => {
-        timer.current = null;
-        if (!cancelled) {
-          void queryClient.invalidateQueries({ queryKey: key.current });
-        }
-      }, COALESCE_MS);
+      timer.current = setTimeout(flush, COALESCE_MS);
     };
 
     const channel = new Channel<WatchEvent>();
@@ -88,7 +103,7 @@ export function useWatch(
     };
 
     api
-      .startWatch(resource, namespace, channel)
+      .startWatch(resource, namespace, channel, labelSelector)
       .then((started) => {
         if (cancelled) {
           // The view unmounted while the watch was starting; stop it
@@ -120,7 +135,15 @@ export function useWatch(
     // object: a new `resource` literal on every render would restart the
     // watch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resource.group, resource.version, resource.kind, namespace, enabled, queryClient]);
+  }, [
+    resource.group,
+    resource.version,
+    resource.kind,
+    namespace,
+    labelSelector,
+    enabled,
+    queryClient,
+  ]);
 
   return { live, error };
 }

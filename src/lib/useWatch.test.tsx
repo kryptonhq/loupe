@@ -126,6 +126,40 @@ describe("useWatch", () => {
     expect(invalidated).toBe(1);
   });
 
+  it("waits for a fetch in flight rather than cancelling it", async () => {
+    // The reported bug: on a busy cluster, changes arrive faster than a
+    // LIST returns, and invalidating cancels the fetch in flight — so
+    // every refetch was cancelled by the next change and the listing
+    // never moved. It must wait for the fetch to land, then go again.
+    setup();
+    await waitFor(() => expect(startWatch).toHaveBeenCalled());
+
+    let finish!: () => void;
+    const slow = new Promise<void>((r) => (finish = r));
+    void client.prefetchQuery({ queryKey: ["table", "pods"], queryFn: () => slow });
+
+    emit(change());
+    await new Promise((r) => setTimeout(r, 900));
+    expect(invalidated).toBe(0);
+
+    await act(async () => finish());
+    await waitFor(() => expect(invalidated).toBe(1));
+  });
+
+  it("passes a label selector through to the watch", async () => {
+    function Selected() {
+      useWatch(POD, null, ["x"], true, "owner=helm");
+      return null;
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Selected />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(startWatch).toHaveBeenCalled());
+    expect(startWatch.mock.calls[0][3]).toBe("owner=helm");
+  });
+
   it("refetches after a relist rather than trusting the cache", async () => {
     setup();
     await waitFor(() => expect(startWatch).toHaveBeenCalled());

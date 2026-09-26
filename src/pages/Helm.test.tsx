@@ -18,8 +18,13 @@ vi.mock("../lib/api", async (original) => {
   const actual = await original<typeof import("../lib/api")>();
   return {
     ...actual,
+    Channel: class {
+      onmessage?: (event: unknown) => void;
+    },
     api: {
       ...actual.api,
+      startWatch: vi.fn(async () => 1),
+      stopWatch: vi.fn(async () => true),
       listHelmReleases: vi.fn(),
       getHelmRelease: vi.fn(),
       listNamespaces: vi.fn(),
