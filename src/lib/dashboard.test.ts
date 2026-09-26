@@ -131,6 +131,17 @@ describe("busiestNodes", () => {
     expect(busiestNodes(nodes, 2).map((n) => n.name)).toEqual(["hot-cpu", "hot-mem"]);
   });
 
+  it("reads a node with no allocatable yet as idle rather than failing", () => {
+    // A node that has just joined can report no allocatable at all.
+    const [fresh] = joinUsage([row("fresh", { cpuAllocatable: 0, memoryAllocatable: 0 })], undefined);
+    expect(nodeLoad(fresh)).toBe(0);
+  });
+
+  it("breaks a tie by name, so a quiet cluster's list holds still", () => {
+    const nodes = joinUsage([row("b"), row("a"), row("c")], undefined);
+    expect(busiestNodes(nodes, 3).map((n) => n.name)).toEqual(["a", "b", "c"]);
+  });
+
   it("puts a node that is down first whatever its load", () => {
     const nodes = joinUsage(
       [row("busy", { cpuRequested: 4 }), row("down", { ready: false, cpuRequested: 0 })],

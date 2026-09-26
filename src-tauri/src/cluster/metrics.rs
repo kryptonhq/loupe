@@ -86,15 +86,21 @@ pub(crate) fn unavailable_reason(e: &kube::Error) -> String {
 
 /// Current usage for every node, or why there is none.
 pub async fn node_usage(session: &Session) -> Result<UsageAnswer> {
-    let api: Api<DynamicObject> = Api::all_with(session.client().await?, &node_metrics());
-    Ok(match api.list(&ListParams::default()).await {
+    Ok(usage_with(session.client().await?).await)
+}
+
+/// The request itself, split out so it can be driven by a fake API
+/// server rather than a cluster.
+async fn usage_with(client: kube::Client) -> UsageAnswer {
+    let api: Api<DynamicObject> = Api::all_with(client, &node_metrics());
+    match api.list(&ListParams::default()).await {
         Ok(list) => UsageAnswer::Available {
             nodes: usage_from(&list.items),
         },
         Err(e) => UsageAnswer::Unavailable {
             reason: unavailable_reason(&e),
         },
-    })
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +195,55 @@ mod tests {
             UsageAnswer::Unavailable { reason } => {
                 println!("unavailable: {reason}");
                 assert!(!reason.is_empty());
+            }
+        }
+    }
+
+    mod wire {
+        use super::*;
+        use crate::fake_api;
+        use http::StatusCode;
+
+        #[tokio::test]
+        async fn asks_the_metrics_api_for_node_metrics() {
+            let (client, log) = fake_api::client(|seen| match seen.path.as_str() {
+                "/apis/metrics.k8s.io/v1beta1/nodes" => (
+                    StatusCode::OK,
+                    json!({
+                        "kind": "NodeMetricsList",
+                        "apiVersion": "metrics.k8s.io/v1beta1",
+                        "metadata": {},
+                        "items": [{
+                            "metadata": { "name": "worker-1" },
+                            "timestamp": "2026-09-26T00:00:00Z",
+                            "window": "10s",
+                            "usage": { "cpu": "211m", "memory": "740Mi" }
+                        }]
+                    }),
+                ),
+                other => panic!("unexpected request to {other}"),
+            });
+
+            let answer = usage_with(client).await;
+            assert_eq!(
+                answer,
+                UsageAnswer::Available {
+                    nodes: vec![NodeUsage {
+                        name: "worker-1".into(),
+                        cpu: 0.211,
+                        memory: 740.0 * 1024.0 * 1024.0,
+                    }]
+                }
+            );
+            assert_eq!(log.lock().unwrap().len(), 1);
+        }
+
+        #[tokio::test]
+        async fn a_missing_metrics_server_is_an_answer_not_an_error() {
+            let (client, _) = fake_api::client(|_| fake_api::status(404, "NotFound"));
+            match usage_with(client).await {
+                UsageAnswer::Unavailable { reason } => assert!(reason.contains("not installed")),
+                other => panic!("expected unavailable, got {other:?}"),
             }
         }
     }

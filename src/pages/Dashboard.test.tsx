@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Dashboard } from "./Dashboard";
-import { api, type ProblemsSnapshot, type UsageAnswer } from "../lib/api";
+import { api, type Problem, type ProblemsSnapshot, type UsageAnswer } from "../lib/api";
 import { EMPTY_OVERVIEW } from "../lib/dashboard";
 import { demoProblems, DEMO_USAGE } from "../dev/fixtures";
 import type { ProblemsState } from "../lib/useProblems";
@@ -34,13 +34,58 @@ function state(snapshot: ProblemsSnapshot | null, error: string | null = null): 
   return { snapshot, receivedAt: Date.now(), error };
 }
 
-function setup(snapshot: ProblemsSnapshot | null = demo(), usage: UsageAnswer = DEMO_USAGE as UsageAnswer) {
+const GI = 1024 ** 3;
+
+/// A small cluster with nothing wrong, running close to full — the
+/// other side of every tone the demo exercises.
+function healthy(): ProblemsSnapshot {
+  return {
+    ...demo(),
+    problems: [],
+    sources: demo().sources.map((s) => ({ source: s.source, category: s.category, state: "ready" })),
+    overview: {
+      ...EMPTY_OVERVIEW,
+      nodes: { total: 3, ready: 3, cordoned: 0 },
+      pods: { ...EMPTY_OVERVIEW.pods, total: 10, running: 9, succeeded: 1, crashLooping: 1 },
+      workloads: EMPTY_OVERVIEW.workloads.map((w) => ({ ...w, total: 2, healthy: 2 })),
+      capacity: {
+        cpuAllocatable: 10,
+        cpuRequested: 9,
+        memoryAllocatable: 10 * GI,
+        memoryRequested: 9.7 * GI,
+        podsAllocatable: 330,
+        podsScheduled: 9,
+      },
+      claims: { total: 2, bound: 2, pending: 0, lost: 0 },
+    },
+  };
+}
+
+function problem(overrides: Partial<Problem>): Problem {
+  return {
+    id: Math.random().toString(),
+    severity: "warning",
+    category: "nodes",
+    target: null,
+    reason: "Reason",
+    message: "m",
+    since: null,
+    count: null,
+    ...overrides,
+  };
+}
+
+function setup(
+  snapshot: ProblemsSnapshot | null = demo(),
+  usage: UsageAnswer = DEMO_USAGE as UsageAnswer,
+  cluster: typeof CLUSTER | null = CLUSTER,
+) {
   nodeUsage.mockResolvedValue(usage);
   const open = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Dashboard state={state(snapshot)} cluster={CLUSTER} open={open} />
+      <Dashboard state={state(snapshot)} cluster={cluster} open={open} />
     </QueryClientProvider>,
   );
   return { open, user: userEvent.setup() };
@@ -131,12 +176,87 @@ describe("Dashboard", () => {
     expect(rows[0]).toHaveTextContent("Not ready");
   });
 
+  it("reads as healthy when nothing is wrong, and loud near the ceiling", async () => {
+    setup(healthy(), { state: "unavailable", reason: "not installed" });
+    expect(screen.getByTitle("Open Nodes")).toHaveTextContent("All ready");
+    expect(screen.getByTitle("Open Workloads healthy")).toHaveTextContent(
+      "Deployments, StatefulSets, DaemonSets",
+    );
+    expect(screen.getByTitle("Open Problems")).toHaveTextContent("Nothing wrong right now");
+    // 90% of CPU requested is high; 97% of memory is near full.
+    await waitFor(() => expect(card("CPU")).toHaveTextContent("High"));
+    expect(card("Memory")).toHaveTextContent("Near full");
+    expect(card("Pod phases")).toHaveTextContent("1 running pod is crash-looping");
+    expect(within(card("Workloads")).getAllByText("ok")).toHaveLength(5);
+  });
+
+  it("lists a problem on a node without a namespace, with its count", () => {
+    const snapshot = healthy();
+    snapshot.problems = [
+      problem({
+        reason: "NodeNotReady",
+        count: 3,
+        target: { group: "", version: "v1", kind: "Node", namespace: null, name: "worker-2" },
+      }),
+      problem({ reason: "Orphaned", message: "no object behind this" }),
+    ];
+    setup(snapshot);
+    const problems = card("Problems");
+    expect(within(problems).getByText("Node worker-2")).toBeInTheDocument();
+    expect(within(problems).getByText("×3")).toBeInTheDocument();
+    // A row with nothing behind it cannot be opened.
+    expect(within(problems).getByText("Orphaned").closest("button")).toBeDisabled();
+  });
+
+  it("names a workload kind it does not know by its API kind", () => {
+    // A newer core may count a kind this build has no label for.
+    const snapshot = healthy();
+    snapshot.overview.workloads = [{ kind: "Rollout", total: 3, healthy: 1 }];
+    setup(snapshot);
+    const row = within(card("Workloads")).getByRole("button", { name: /^Rollout/ });
+    expect(row).toHaveTextContent("2 unhealthy");
+  });
+
+  it("says a source that failed to list, and waits for one still listing", () => {
+    const snapshot = demo();
+    snapshot.sources = snapshot.sources.map((s) =>
+      s.source === "persistentVolumeClaims"
+        ? { ...s, state: "failed", message: "timeout" }
+        : s.source === "pods"
+          ? { source: s.source, category: s.category, state: "loading" }
+          : s,
+    );
+    setup(snapshot);
+    expect(card("Volume claims")).toHaveTextContent("Could not list persistentVolumeClaims");
+    expect(within(card("CPU")).queryByRole("meter")).not.toBeInTheDocument();
+  });
+
+  it("marks every widget built on pods when pods are refused", () => {
+    const snapshot = demo();
+    snapshot.sources = snapshot.sources.map((s) =>
+      s.source === "pods" ? { ...s, state: "forbidden", message: "no" } : s,
+    );
+    setup(snapshot);
+    for (const name of ["Pod slots", "Pod phases", "Most restarts", "Namespaces by pods"]) {
+      expect(card(name)).toHaveTextContent("Not permitted to list pods");
+    }
+  });
+
+  it("still renders before a cluster is named", () => {
+    setup(demo(), DEMO_USAGE as UsageAnswer, null);
+    expect(screen.getByText("Cluster overview")).toBeInTheDocument();
+  });
+
   it("shows empty states on an empty cluster", () => {
     setup({ ...demo(), problems: [], overview: EMPTY_OVERVIEW }, { state: "available", nodes: [] });
     expect(card("Problems")).toHaveTextContent("Nothing broken right now.");
     expect(card("Most restarts")).toHaveTextContent("No container has restarted.");
     expect(card("Volume claims")).toHaveTextContent("No persistent volume claims.");
     expect(card("Pod phases")).toHaveTextContent("No pods.");
+    expect(card("Namespaces by pods")).toHaveTextContent("No pods in any namespace.");
+    expect(nodesCard()).toHaveTextContent("No nodes.");
+    // Nothing to measure yet is not "healthy": the tiles stay neutral.
+    expect(screen.getByTitle("Open Nodes")).toHaveTextContent("0/ 0");
   });
 });
 

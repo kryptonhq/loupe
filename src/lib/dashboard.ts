@@ -109,13 +109,17 @@ export function clusterUsage(nodes: NodeLoad[]): {
   memoryUsed: number;
   memoryAllocatable: number;
 } | null {
-  const reporting = nodes.filter((n) => n.cpuUsed != null && n.memoryUsed != null);
+  const reporting = nodes.flatMap((n) =>
+    n.cpuUsed != null && n.memoryUsed != null
+      ? [{ ...n, cpuUsed: n.cpuUsed, memoryUsed: n.memoryUsed }]
+      : [],
+  );
   if (reporting.length === 0) return null;
   return reporting.reduce(
     (acc, n) => ({
-      cpuUsed: acc.cpuUsed + (n.cpuUsed ?? 0),
+      cpuUsed: acc.cpuUsed + n.cpuUsed,
       cpuAllocatable: acc.cpuAllocatable + n.cpuAllocatable,
-      memoryUsed: acc.memoryUsed + (n.memoryUsed ?? 0),
+      memoryUsed: acc.memoryUsed + n.memoryUsed,
       memoryAllocatable: acc.memoryAllocatable + n.memoryAllocatable,
     }),
     { cpuUsed: 0, cpuAllocatable: 0, memoryUsed: 0, memoryAllocatable: 0 },
