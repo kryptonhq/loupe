@@ -1,0 +1,29 @@
+---
+title: Detail views
+description: Pods, nodes and namespaces have views of their own; every object has its events and manifest.
+icon: FileSearch
+---
+
+- **Pod** — containers and their images, termination reasons,
+  conditions, labels, events and the full manifest, with
+  [logs](/docs/logs-and-exec), a shell and a port forward a tab away
+- **Node** — allocated CPU and memory against allocatable, taints,
+  pressure conditions, and the pods bound to the node
+- **Namespace** — pod phase counts, ResourceQuota utilisation,
+  remaining finalizers on a terminating namespace, and the resources it
+  contains
+
+Every other kind opens on an overview, with tabs for what applies to
+it:
+
+- **Data** — ConfigMaps and Secrets, key by key
+- **Logs** — workloads with a selector, merged across their pods
+- **Events** — namespaced objects
+- **Related** — owners, selections, routes and references; see
+  [related objects](/docs/browsing#related-objects)
+- **YAML** — the manifest, with [editing](/docs/editing)
+
+![Pod detail: containers, conditions, a port forward and labels](/img/loupe/pod-detail.png)
+
+<kbd>Esc</kbd> closes a detail view and returns to the listing it came
+from.

@@ -1,0 +1,28 @@
+---
+title: Logs, exec and port-forward
+description: Stream and filter pod logs, tail a whole workload, open a shell in a container, and forward ports.
+icon: SquareTerminal
+---
+
+## Logs
+
+Pod logs are streamed from the API server, with container selection,
+timestamps, and `previous` for a terminated container's logs.
+
+- **Merged view.** Tail every pod of a workload in one stream,
+  colour-coded per pod, instead of opening them one at a time.
+- **Filter and highlight** what is on screen, and **copy or save** it.
+- **Keeps up with chatty pods.** Lines are batched in the Rust core and
+  coalesced onto animation frames, and only the visible ones are in the
+  DOM.
+
+## Exec
+
+A shell in a container runs through a real terminal emulator, not a
+text box that sends lines.
+
+## Port forwarding
+
+A pod's detail view forwards a local port to one of its ports. Forwards
+stay listed in the port-forward manager while they run — instead of
+in a terminal you have to leave open — and are stopped from there.

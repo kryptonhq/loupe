@@ -1,0 +1,60 @@
+---
+title: Introduction
+description: An Apache-2.0 desktop client for Kubernetes, built on the API server's discovery and table-printing endpoints.
+icon: Aperture
+---
+
+Loupe is a desktop client for Kubernetes, licensed Apache-2.0. It reads
+the kubeconfig `kubectl` already uses and issues requests directly to
+the API server from your machine.
+
+It is a [Tauri](https://tauri.app/) application: a React and TypeScript
+frontend over a Rust core that holds the client connection. Builds are
+published for macOS, Linux and Windows, and it works against any
+conformant Kubernetes cluster — managed, self-hosted, or a local kind
+or OrbStack cluster.
+
+![The pod listing, with status, ready counts, restarts and age](/img/loupe/pods.png)
+
+## Architecture
+
+Loupe has no in-cluster component. There is no operator to install, no
+service account to create, and no telemetry.
+
+<Mermaid
+  chart={`flowchart LR
+    kubeconfig["~/.kube/config"] --> core
+    subgraph machine["Your machine"]
+      ui["UI — React"] <--> core["Core — Rust"]
+    end
+    core -- "your credentials, your RBAC" --> api["Kubernetes API server"]`}
+/>
+
+Every request originates from the machine running the app, using the
+credentials in the selected kubeconfig context. Authorisation is
+therefore whatever RBAC already grants that user: Loupe can read what
+`kubectl` can read, and is refused the same things.
+
+Resource types are resolved through the API server's discovery
+endpoints rather than a compiled-in list, and lists are requested as
+`application/json;as=Table;g=meta.k8s.io;v=v1` so the server returns
+the same rows and printer columns that `kubectl get` renders. Custom
+resources are handled by the same path as built-in kinds, which is why
+a CRD installed after the binary was built needs no upgrade to browse.
+
+## Where to start
+
+<Cards>
+  <Card title="Installation" href="/docs/installation">
+    Homebrew, `.dmg`, `.deb`, `.rpm`, `.AppImage` or a Windows installer — and how to verify one.
+  </Card>
+  <Card title="First run" href="/docs/first-run">
+    Pick a context, connect, and find your way around.
+  </Card>
+  <Card title="The workbench" href="/docs/workbench">
+    Tabs, history, the status bar and the command palette.
+  </Card>
+  <Card title="Release notes" href="/docs/releases">
+    What changed in each version, newest first.
+  </Card>
+</Cards>

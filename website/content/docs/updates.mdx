@@ -1,0 +1,35 @@
+---
+title: Updates
+description: Loupe checks for new versions on launch and updates itself from a signed feed.
+icon: RefreshCw
+---
+
+Loupe checks once on launch and offers a new version in the status bar,
+and on the cluster picker — so a release that fixes a connection problem
+can be found without connecting.
+
+To check on demand:
+
+- **Loupe › Check for Updates…** in the macOS menu
+- **Check for updates** in the command palette
+- the **Check for updates** link on the cluster picker, on every
+  platform
+
+A check you ask for always answers: a new version, "Loupe is up to
+date", or why it could not tell.
+
+## Verification
+
+Downloads are verified against a signing key compiled into the binary,
+so a compromised release host cannot ship an artifact the private key
+did not sign.
+
+## Package managers
+
+- **Homebrew.** The cask is marked `auto_updates true`, so
+  `brew upgrade` leaves Loupe to update itself. Pass `--greedy` if you
+  would rather Homebrew drive it.
+- **`.deb`.** Deliberately does not self-update — the package manager
+  owns those files.
+- **Before 0.1.5** there was no updater. Reaching 0.1.5 or later from an
+  older build needs `brew upgrade` or a fresh download.

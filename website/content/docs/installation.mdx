@@ -1,0 +1,110 @@
+---
+title: Installation
+description: Install Loupe on macOS, Linux or Windows, and verify what you downloaded.
+icon: Download
+---
+
+Loupe ships as a native binary for macOS, Linux and Windows. The current
+release is **v0.1.7** — see the [release notes](/docs/releases) for what
+changed. Every build is on the
+[latest release](https://github.com/kryptonhq/loupe/releases/latest) page.
+
+<Tabs groupId="os" persist items={['macOS', 'Linux', 'Windows']}>
+  <Tab value="macOS">
+
+The cask resolves the correct architecture:
+
+```bash
+brew install --cask kryptonhq/tap/loupe
+```
+
+Alternatively, download a `.dmg` from the
+[latest release](https://github.com/kryptonhq/loupe/releases/latest) —
+`aarch64` for Apple Silicon, `x64` for Intel. The architectures are
+built separately rather than as a universal binary, so each download
+contains one slice.
+
+<Callout type="info" title="Signed and notarised since v0.1.2">
+The macOS builds are signed with a Developer ID and notarised, with the
+ticket stapled, so the app opens on a double-click. There is nothing to
+allow in System Settings and no quarantine attribute to remove.
+
+Loupe also updates itself from v0.1.5 onward, so `brew upgrade` is only
+needed to reach that version. The cask is marked `auto_updates true`;
+pass `--greedy` if you would rather Homebrew drive the upgrade.
+</Callout>
+
+  </Tab>
+  <Tab value="Linux">
+
+Three formats are published per release:
+
+| Format | Install |
+| --- | --- |
+| `.deb` | `sudo apt install ./Loupe_<version>_amd64.deb` |
+| `.rpm` | `sudo dnf install ./Loupe-<version>-1.x86_64.rpm` |
+| `.AppImage` | `chmod +x Loupe_<version>_amd64.AppImage && ./Loupe_<version>_amd64.AppImage` |
+
+Builds are produced on Ubuntu 22.04. The binary links against the glibc
+of its build host, so building on a newer runner would raise the
+minimum glibc required to start.
+
+Each file has a detached GPG signature beside it in the release — see
+[verifying a download](#verifying-a-download).
+
+  </Tab>
+  <Tab value="Windows">
+
+Download either installer from the
+[latest release](https://github.com/kryptonhq/loupe/releases/latest):
+
+- `Loupe_<version>_x64_en-US.msi` — the MSI package
+- `Loupe_<version>_x64-setup.exe` — the NSIS installer
+
+<Callout type="warn" title="Unsigned — signing planned">
+The installers are not yet Authenticode-signed, so SmartScreen warns on
+first run. Select **More info → Run anyway**. Signing for both the MSI
+and the NSIS installer is planned.
+</Callout>
+
+  </Tab>
+</Tabs>
+
+## Verifying a download
+
+macOS builds are verified by Gatekeeper on open. Linux builds carry a
+detached GPG signature per file — `Loupe_<version>_amd64.deb.asc` beside
+`Loupe_<version>_amd64.deb`, and likewise for the `.rpm` and
+`.AppImage`.
+
+Import the release key, published in the repository at
+[`packaging/linux/loupe-release.asc`](https://github.com/kryptonhq/loupe/blob/main/packaging/linux/loupe-release.asc),
+and check that its fingerprint is
+`CC01 D01D 4A8B 455D CC67 EED5 1D2D 0C2A 56D7 8DD0` — the same value is in
+[`packaging/linux/README.md`](https://github.com/kryptonhq/loupe/blob/main/packaging/linux/README.md) —
+before trusting it:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/kryptonhq/loupe/main/packaging/linux/loupe-release.asc
+gpg --import loupe-release.asc
+gpg --fingerprint "Loupe Release Signing"
+```
+
+Then verify whichever format you downloaded:
+
+| Format | Verify |
+| --- | --- |
+| `.deb` | `gpg --verify Loupe_<version>_amd64.deb.asc Loupe_<version>_amd64.deb` |
+| `.rpm` | `gpg --verify Loupe-<version>-1.x86_64.rpm.asc Loupe-<version>-1.x86_64.rpm` |
+| `.AppImage` | `gpg --verify Loupe_<version>_amd64.AppImage.asc Loupe_<version>_amd64.AppImage` |
+
+Look for `Good signature from "Loupe Release Signing"`. The warning that
+the key is not certified with a trusted signature is expected unless you
+have signed the key yourself.
+
+<Callout>
+The `.sig` files in each release are minisign signatures used by the
+built-in updater, not GPG signatures, and do not verify with `gpg`.
+Releases published before Linux signing was introduced have no `.asc`
+files.
+</Callout>

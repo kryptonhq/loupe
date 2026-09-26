@@ -1,0 +1,67 @@
+---
+title: Configuration
+description: Where settings.json lives and every key it holds — theme, zoom, pinned contexts, write guards and Problems thresholds.
+icon: Settings
+---
+
+Loupe keeps its settings in one file, `settings.json`, in the
+application's config directory:
+
+| Platform | Directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/ai.krypton.loupe/` |
+| Linux | `~/.config/ai.krypton.loupe/` |
+| Windows | `%APPDATA%\ai.krypton.loupe\` |
+
+Most of it is written by the app as you use it. Edit it with Loupe
+closed; changes to `problems` apply from the next connection.
+
+## Keys
+
+```json
+{
+  "theme": "system",
+  "zoom": 1.0,
+  "recentContexts": ["kind-dev", "prod-eu"],
+  "pinnedContexts": ["prod-eu"],
+  "readOnlyContexts": ["prod-us-audit"],
+  "protectedContexts": ["prod-eu"],
+  "protectedPatterns": ["*prod*"],
+  "problems": {
+    "gracePeriodSeconds": 120,
+    "restartThreshold": 5
+  }
+}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `theme` | `"system"` | `"system"`, `"light"` or `"dark"`. `system` keeps following the OS rather than recording what it said once. |
+| `zoom` | `1.0` | Interface scale, set by <kbd>⌘+</kbd> / <kbd>⌘−</kbd> / <kbd>⌘0</kbd>. |
+| `recentContexts` | `[]` | Contexts connected to, most recent first. The last eight are kept. |
+| `pinnedContexts` | `[]` | Contexts pinned to the top of the picker, in your order. |
+| `readOnlyContexts` | `[]` | Contexts where writes are refused outright. |
+| `protectedContexts` | `[]` | Contexts where each write is confirmed by typing the context's name. |
+| `protectedPatterns` | `[]` | Patterns that mark contexts protected without naming each one. |
+| `problems.gracePeriodSeconds` | `120` | How long a pod may be pending or unready, a workload short of replicas, or a claim unbound, before [Problems](/docs/problems) lists it. |
+| `problems.restartThreshold` | `5` | Restarts within the last hour that make a running container worth listing. |
+
+## Protected patterns
+
+A pattern is not a regular expression: `*` stands for any run of
+characters and nothing else is special. A pattern with no `*` must
+match the whole context name, so `prod` protects `prod` and not
+`prod-eu`; `*prod*` covers every context with `prod` anywhere in its
+name.
+
+A context marked explicitly — read-only or protected — takes that
+guard regardless of any pattern, so one cluster can be exempted from a
+broad rule.
+
+## Environment
+
+When opened from the Dock, Finder or a desktop launcher, Loupe reads
+your login shell's environment at startup. `KUBECONFIG`, `AWS_PROFILE`
+and `PATH` set in your shell profile therefore apply, the same as for
+`kubectl` in a terminal — see
+[troubleshooting](/docs/troubleshooting#auth-plugin-not-found).

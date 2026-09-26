@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* The app's palette and type (src/styles/tokens.css), so the docs and the
+   product look like one thing.
+   indigo  the accent: actions, links, the mark
+   ink     text on the content plane
+   The dark accent is the app's lifted indigo, which holds contrast on
+   near-black where the light one would not. */
+@theme {
+  --color-loupe-indigo: #6366f1;
+  --color-loupe-ink: #0f172a;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  --color-fd-primary: #4f46e5;
+  --color-fd-ring: #6366f1;
+}
+
+.dark {
+  --color-fd-primary: #8184f8;
+  --color-fd-ring: #8184f8;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Numbers in tables shouldn't jitter between rows. */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keyboard shortcuts appear on nearly every page. */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--color-fd-border);
+  border-bottom-width: 2px;
+  border-radius: 0.3rem;
+  background: var(--color-fd-card);
+  white-space: nowrap;
+}
+
+/* Screenshots are captured at 2x with the window's own shadow trimmed;
+   give them an edge so light ones don't dissolve into the page. */
+.prose img {
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.6rem;
+}

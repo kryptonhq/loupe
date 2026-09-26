@@ -1,0 +1,65 @@
+---
+title: Problems
+description: One view of everything currently broken across the cluster, kept current by watches rather than polling.
+icon: TriangleAlert
+---
+
+One view of everything currently broken across the cluster, opened from
+the top of the rail, from the status bar's problem count, or as
+**Problems** in the command palette.
+
+## What it detects
+
+- **Pods** — `CrashLoopBackOff` with the last exit code, `ImagePullBackOff`
+  and `ErrImagePull` with the image reference, container configuration
+  errors, `OOMKilled` on the last termination, `Pending` with the
+  scheduler's own reason, not Ready past the grace period, and restarts
+  above a threshold within the last hour
+- **Workloads** — Deployments, StatefulSets and DaemonSets short of
+  their replicas past the grace period, stalled rollouts, failed Jobs,
+  and CronJobs whose last run failed
+- **Nodes** — not Ready, memory, disk and PID pressure, cordoned, and
+  taints that are keeping pending pods off a node they would otherwise
+  fit
+- **Events** — `Warning` events from the last hour, one row per object
+  and reason with a count, so forty identical `FailedScheduling` events
+  are one line
+- **Storage** — claims left `Pending` past the grace period
+
+Rows are ordered worst first, sortable by severity and age, filterable
+by namespace, and open the object they describe. Each tab keeps its own
+sort and namespace.
+
+## How it stays current
+
+The view is kept current by watching those kinds — one list per kind
+and then changes — rather than by polling, so a fixed image drops off
+without a refresh.
+
+If RBAC does not allow listing one of them, that category shows a
+single "not permitted" row instead of an empty section that would read
+as healthy; the others are unaffected.
+
+## Tuning
+
+What counts as broken rather than still starting is configurable in
+[`settings.json`](/docs/configuration), and applies from the next
+connection:
+
+```json
+{
+  "problems": {
+    "gracePeriodSeconds": 120,
+    "restartThreshold": 5
+  }
+}
+```
+
+## The count in the status bar
+
+The status bar counts critical and warning rows. Warning events and
+unavailable categories appear in the view but not in the count, so a
+busy cluster's badge still means something.
+
+Metrics-based problems such as CPU throttling are not detected, and
+nothing is sent anywhere — there are no notifications or alerts.

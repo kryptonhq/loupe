@@ -1,0 +1,60 @@
+---
+title: Troubleshooting
+description: Fixes for the problems people actually hit — auth plugins not found, SmartScreen, Homebrew errors and updates.
+icon: LifeBuoy
+---
+
+## Auth plugin not found
+
+**Symptom:** an EKS, GKE or AKS context fails to connect with
+`auth error: unable to run auth exec: No such file or directory`, while
+`kubectl` in a terminal works.
+
+Those kubeconfigs authenticate by running a plugin — `aws`,
+`gke-gcloud-auth-plugin`, `kubelogin` — found on `PATH`. An app launched
+by macOS from the Dock or Finder gets only
+`/usr/bin:/bin:/usr/sbin:/sbin`, not your shell's `PATH`.
+
+**Fix:** update to **0.1.6 or later**. Loupe now reads your login
+shell's environment at startup, so it finds the same plugin `kubectl`
+does and picks up `KUBECONFIG`, `AWS_PROFILE` and similar variables set
+there. If it still fails, check that the plugin's directory is added to
+`PATH` in your login shell's profile (`~/.zprofile` or `~/.zshrc` for
+zsh), not only in a terminal-specific one.
+
+## Windows SmartScreen warns on first run
+
+The Windows installers are not yet Authenticode-signed. Select
+**More info → Run anyway**. Signing is planned.
+
+## Homebrew: `depends_on macos` is disabled
+
+`brew install` and `brew upgrade` under Homebrew 7 failed with
+"Calling `depends_on macos: :catalina` is disabled". Fixed in the cask
+published with **0.1.7** — run `brew update` and try again.
+
+## `brew upgrade` does nothing
+
+The cask is marked `auto_updates true`, because Loupe
+[updates itself](/docs/updates). Use `brew upgrade --cask --greedy loupe`
+if you want Homebrew to do it.
+
+## A listing does not change
+
+Listings are watched, not polled. If a change does not appear, check
+that your RBAC allows `watch` as well as `list` on that kind — without
+it, a listing is only as fresh as its last refresh.
+
+## A Problems category says "not permitted"
+
+Your credentials cannot list that kind cluster-wide. The other
+categories are unaffected; the row is there so an empty section is not
+mistaken for a healthy one.
+
+## Reporting a bug
+
+Open an issue on
+[GitHub](https://github.com/kryptonhq/loupe/issues) with your Loupe
+version (from the status bar), your platform, and the Kubernetes
+version of the cluster. Report security issues privately — see
+[SECURITY.md](https://github.com/kryptonhq/loupe/blob/main/SECURITY.md).

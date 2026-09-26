@@ -1,0 +1,35 @@
+---
+title: Dashboard
+description: A bird's-eye view of the cluster — nodes, pods, workloads, capacity and problems — where every number opens what is behind it.
+icon: LayoutDashboard
+---
+
+Loupe opens on the dashboard once a cluster connects. It answers "how
+is this cluster doing?" before you have chosen where to look.
+
+## What it shows
+
+- **Nodes** — ready and cordoned
+- **Pods by phase**, with crash loops called out
+- **Workloads** healthy by kind — Deployments, StatefulSets, DaemonSets
+- **CPU and memory** — live usage when
+  [metrics-server](https://github.com/kubernetes-sigs/metrics-server) is
+  installed; otherwise requests against allocatable, and the widget says
+  that is what it is showing
+- **Pod slots** — how close the cluster is to each node's max-pods
+- **Busiest nodes**, the **containers restarting most**, **namespaces by
+  pod count** and **volume-claim status**
+- **Problems** — the [Problems](/docs/problems) list as a widget
+
+Every number opens what is behind it — the listing or object it
+counts. <kbd>⌘</kbd>-click opens it in a new tab.
+
+## Cost to the cluster
+
+The counts ride on the same watches that keep [Problems](/docs/problems)
+current, so the dashboard is live and makes no extra LIST requests.
+Live usage comes from `metrics.k8s.io` when it is served.
+
+If RBAC refuses one of the sources, its widget says so rather than
+showing zero — a dashboard that reads healthy because it could not look
+is worse than none.

@@ -1,0 +1,37 @@
+---
+title: Loupe 0.1.0
+description: The first release — resource browsing, detail views, Helm and YAML editing.
+---
+
+*Released 1 August 2026 —
+[on GitHub](https://github.com/kryptonhq/loupe/releases/tag/v0.1.0)*
+
+The first published build.
+
+### Added
+
+- **Resource browsing** for built-in kinds and custom resources, the
+  latter resolved through API discovery and rendered with the printer
+  columns their CRDs declare
+- **Detail views** for pods, nodes and namespaces — containers and
+  termination reasons, allocated CPU and memory against allocatable,
+  quota utilisation and remaining finalizers
+- **Helm releases** read from the release Secrets: values, rendered
+  manifests, notes and revision history, with no `helm` binary involved
+- **YAML editing**, writing back with a full replace so a concurrent
+  modification is rejected by the API server rather than silently
+  overwritten
+- **A design system** of glass surfaces with native window vibrancy, and
+  a light, dark or system-following theme preference
+- **A release pipeline** building macOS, Linux and Windows, and a
+  Homebrew cask
+
+### Known limitations at the time
+
+Deletion, `exec`, multiple simultaneous clusters and owner-reference
+navigation were all absent. Every one of them shipped in
+[0.1.5](/docs/releases/0-1-5).
+
+macOS builds were ad-hoc signed rather than notarised, so Gatekeeper
+blocked the first launch. That was fixed in
+[0.1.2](/docs/releases/0-1-2).

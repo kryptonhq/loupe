@@ -1,0 +1,25 @@
+{
+  "pages": [
+    "index",
+    "installation",
+    "first-run",
+    "---Using Loupe---",
+    "workbench",
+    "dashboard",
+    "problems",
+    "search",
+    "browsing",
+    "detail-views",
+    "logs-and-exec",
+    "editing",
+    "helm-and-secrets",
+    "updates",
+    "---Reference---",
+    "configuration",
+    "keyboard-shortcuts",
+    "troubleshooting",
+    "limitations",
+    "building-from-source",
+    "releases"
+  ]
+}
