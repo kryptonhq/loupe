@@ -517,6 +517,85 @@ const DEMO_OBJECTS = [
   status,
 }));
 
+const GI = 1024 ** 3;
+
+/// A mid-sized cluster with a little wrong with it, for laying out the
+/// dashboard: one node down, one cordoned, one running hot.
+const DEMO_NODES = [
+  ["ip-10-0-1-12", true, false, 7.9, 30 * GI, 5.1, 18 * GI, 31],
+  ["ip-10-0-1-47", true, false, 7.9, 30 * GI, 7.2, 26 * GI, 44],
+  ["ip-10-0-2-08", true, true, 7.9, 30 * GI, 1.2, 4 * GI, 9],
+  ["ip-10-0-2-91", false, false, 7.9, 30 * GI, 0, 0, 0],
+  ["ip-10-0-3-33", true, false, 15.9, 61 * GI, 6.4, 22 * GI, 38],
+].map(([name, ready, cordoned, cpuAllocatable, memoryAllocatable, cpuRequested, memoryRequested, pods]) => ({
+  name: name as string,
+  ready: ready as boolean,
+  cordoned: cordoned as boolean,
+  cpuAllocatable: cpuAllocatable as number,
+  memoryAllocatable: memoryAllocatable as number,
+  cpuRequested: cpuRequested as number,
+  memoryRequested: memoryRequested as number,
+  pods: pods as number,
+}));
+
+const DEMO_OVERVIEW = {
+  nodes: { total: 5, ready: 4, cordoned: 1 },
+  pods: {
+    total: 131,
+    running: 118,
+    pending: 4,
+    succeeded: 6,
+    failed: 2,
+    unknown: 1,
+    crashLooping: 3,
+  },
+  workloads: [
+    { kind: "Deployment", total: 42, healthy: 39 },
+    { kind: "StatefulSet", total: 6, healthy: 5 },
+    { kind: "DaemonSet", total: 7, healthy: 6 },
+    { kind: "Job", total: 12, healthy: 11 },
+    { kind: "CronJob", total: 4, healthy: 4 },
+  ],
+  capacity: {
+    cpuAllocatable: DEMO_NODES.reduce((a, n) => a + n.cpuAllocatable, 0),
+    memoryAllocatable: DEMO_NODES.reduce((a, n) => a + n.memoryAllocatable, 0),
+    cpuRequested: DEMO_NODES.reduce((a, n) => a + n.cpuRequested, 0),
+    memoryRequested: DEMO_NODES.reduce((a, n) => a + n.memoryRequested, 0),
+    podsAllocatable: 550,
+    podsScheduled: 122,
+  },
+  nodeRows: DEMO_NODES,
+  restarts: [
+    { namespace: "shop", pod: "checkout-7f9c-x2k", container: "app", restarts: 47, lastReason: "Error" },
+    { namespace: "ml", pod: "trainer-0", container: "worker", restarts: 12, lastReason: "OOMKilled" },
+    { namespace: "shop", pod: "web-5d8b-q9w", container: "nginx", restarts: 6, lastReason: "Completed" },
+    { namespace: "monitoring", pod: "prometheus-0", container: "prometheus", restarts: 3, lastReason: "OOMKilled" },
+    { namespace: "kube-system", pod: "coredns-58db975755-wbhbz", container: "coredns", restarts: 1, lastReason: null },
+  ],
+  // Namespaces the demo's own namespace list has, so following a row
+  // lands on a filter the picker can show.
+  namespaces: [
+    { namespace: "default", pods: 38 },
+    { namespace: "kube-system", pods: 27 },
+    { namespace: "agents", pods: 22 },
+    { namespace: "krypton-system", pods: 14 },
+    { namespace: "local-path-storage", pods: 11 },
+  ],
+  namespaceCount: 14,
+  claims: { total: 23, bound: 21, pending: 1, lost: 1 },
+};
+
+/// Live usage for all but the node that is down, which metrics-server
+/// cannot reach either.
+export const DEMO_USAGE = {
+  state: "available",
+  nodes: DEMO_NODES.filter((n) => n.ready).map((n, i) => ({
+    name: n.name,
+    cpu: n.cpuRequested * [0.62, 1.08, 0.4, 0.55][i],
+    memory: n.memoryRequested * [0.8, 1.05, 0.7, 0.9][i],
+  })),
+};
+
 /// A Problems snapshot with one of everything the monitor can say,
 /// including a source RBAC refused — so the view can be laid out and
 /// screenshotted without breaking a cluster on purpose.
@@ -537,17 +616,18 @@ export function demoProblems(now = Math.floor(Date.now() / 1000)) {
     generatedAt: now,
     graceSeconds: 120,
     restartThreshold: 5,
+    overview: DEMO_OVERVIEW,
     sources: [
       source("pods", "pods"),
       source("deployments", "workloads"),
       source("statefulSets", "workloads"),
       source("daemonSets", "workloads"),
       source("jobs", "workloads"),
-      source("cronJobs", "workloads"),
       {
-        ...source("nodes", "nodes", "forbidden"),
-        message: 'nodes is forbidden: User "dev" cannot list resource "nodes"',
+        ...source("cronJobs", "workloads", "forbidden"),
+        message: 'cronjobs.batch is forbidden: User "dev" cannot list resource "cronjobs"',
       },
+      source("nodes", "nodes"),
       source("events", "events"),
       source("persistentVolumeClaims", "storage"),
     ],
@@ -635,12 +715,12 @@ export function demoProblems(now = Math.floor(Date.now() / 1000)) {
         count: 40,
       },
       {
-        id: "source/nodes/NotPermitted",
+        id: "source/cronjobs/NotPermitted",
         severity: "info",
-        category: "nodes",
+        category: "workloads",
         target: null,
         reason: "NotPermitted",
-        message: "Not permitted to list nodes across the cluster, so they were not checked",
+        message: "Not permitted to list cronjobs across the cluster, so they were not checked",
         since: null,
         count: null,
       },
@@ -725,6 +805,15 @@ export function installDemoBridge() {
         return Promise.resolve(1);
       }
       if (cmd === "stop_problems") return Promise.resolve(true);
+      // `?nometrics` shows the dashboard as it looks on a cluster
+      // without metrics-server, which is most fresh ones.
+      if (cmd === "node_usage") {
+        return Promise.resolve(
+          new URLSearchParams(location.search).has("nometrics")
+            ? { state: "unavailable", reason: "metrics-server is not installed, so usage is unknown" }
+            : DEMO_USAGE,
+        );
+      }
       // Cluster-wide search over a small demo index. The real one lives in
       // Rust (cluster::search); this ranks the same way — prefix, then
       // substring, then namespace or kind — so the palette can be laid out.

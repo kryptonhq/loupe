@@ -54,6 +54,7 @@ describe("routeKey", () => {
 
 describe("routeLabel", () => {
   it("names a listing", () => {
+    expect(routeLabel({ type: "dashboard" })).toBe("Dashboard");
     expect(routeLabel({ type: "pods" })).toBe("Pods");
     expect(routeLabel({ type: "kind", entry })).toBe("Deployments");
   });

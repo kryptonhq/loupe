@@ -21,7 +21,7 @@ import type { Route } from "../lib/routes";
 // that read well all use colour to make the left rail scannable — you
 // learn the shape and stop reading the label.
 type Item = {
-  id: "problems" | "nodes" | "namespaces" | "pods" | "helm";
+  id: "dashboard" | "problems" | "nodes" | "namespaces" | "pods" | "helm";
   label: string;
   tint: string;
   glyph: string;
@@ -34,6 +34,8 @@ const CLUSTER_ITEMS: Item[] = [
 ];
 
 const HELM: Item = { id: "helm", label: "Helm", tint: "text-info", glyph: "⎈" };
+
+const DASHBOARD: Item = { id: "dashboard", label: "Dashboard", tint: "text-accent", glyph: "◫" };
 
 const PROBLEMS: Item = { id: "problems", label: "Problems", tint: "text-danger", glyph: "⚠" };
 
@@ -274,8 +276,14 @@ export function Sidebar({
       {/* Scrolls: between the fixed sections and whatever CRDs the
           cluster has, this list is not a fixed height. */}
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {/* Above everything else: the first question after connecting. */}
+        {/* Above everything else: the first questions after connecting —
+            how is this cluster doing, and what is broken. */}
         <div className="pt-1">
+          <NavItem
+            item={DASHBOARD}
+            active={route.type === "dashboard"}
+            onSelect={() => onSelect({ type: "dashboard" })}
+          />
           <NavItem
             item={PROBLEMS}
             active={route.type === "problems"}

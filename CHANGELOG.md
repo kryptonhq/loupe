@@ -10,6 +10,20 @@ This file starts at 0.1.5. Earlier releases are on the
 
 ## [Unreleased]
 
+### Added
+
+- **Dashboard.** Loupe now opens on a bird's-eye view of the cluster:
+  nodes ready and cordoned, pods by phase with crash loops called out,
+  workloads healthy by kind, and the Problems list as a widget. CPU and
+  memory show live usage when metrics-server is installed and fall back
+  to requests — saying so — when it is not; pod slots show how close the
+  cluster is to max-pods. Busiest nodes, the containers restarting most,
+  namespaces by pod count and volume-claim status round it out. Every
+  number opens what is behind it (⌘-click for a new tab). The counts ride
+  on the Problems monitor's snapshot, so the dashboard is live and costs
+  the cluster no extra listing; a source RBAC refuses says so on its
+  widget instead of showing zero.
+
 ### Fixed
 
 - **Listings update by themselves again.** Pods, Nodes, Namespaces and

@@ -43,7 +43,7 @@ describe("Problems", () => {
 
   it("says a category could not be checked rather than implying it is fine", () => {
     setup(state(demo()));
-    expect(screen.getByText(/Not permitted to list nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/Not permitted to list cronjobs/)).toBeInTheDocument();
   });
 
   it("opens the row that was clicked, with the intent it was clicked with", async () => {
@@ -57,7 +57,7 @@ describe("Problems", () => {
 
   it("does nothing for a row with nothing behind it", async () => {
     const { onOpen, user } = setup(state(demo()));
-    await user.click(screen.getByText(/Not permitted to list nodes/));
+    await user.click(screen.getByText(/Not permitted to list cronjobs/));
     expect(onOpen).not.toHaveBeenCalled();
   });
 
@@ -65,7 +65,7 @@ describe("Problems", () => {
     setup(state(demo()), { namespace: "ml" });
     expect(screen.getByText("3 items")).toBeInTheDocument();
     expect(screen.queryByText("checkout-7f9c-x2k")).not.toBeInTheDocument();
-    expect(screen.getByText(/Not permitted to list nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/Not permitted to list cronjobs/)).toBeInTheDocument();
   });
 
   it("reports a namespace change to the route rather than holding it", async () => {
