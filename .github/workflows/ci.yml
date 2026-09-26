@@ -76,11 +76,60 @@ jobs:
           fi
           echo "All commits are signed off."
 
+  # Does this change touch the app at all?
+  #
+  # The docs site in `website/` is a separate Next.js app, built and
+  # deployed by Vercel, with nothing here that tests it. A change that
+  # only touches it skips the app's jobs; `ci` counts skipped as passed,
+  # so a docs PR still goes green without spending twenty minutes on a
+  # Rust build it cannot affect. DCO still runs — sign-off is about the
+  # contribution, not what it touches.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.diff.outputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            push)         range="$PUSH_BEFORE..$GITHUB_SHA" ;;
+            *)            range="" ;;
+          esac
+
+          # A manual run, a new branch (before is all zeros) or a range
+          # git cannot resolve: run everything rather than guess.
+          if [ -z "$range" ] || ! files="$(git diff --name-only "$range" 2>/dev/null)"; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "$files"
+          outside="$(printf '%s\n' "$files" | grep -vE '^website/' || true)"
+          if [ -n "$outside" ]; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only website/ changed; skipping the app's jobs."
+            echo "app=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # The three manifests that carry a version drift silently, and the
   # cost lands at release time when an installer is named after the
   # wrong one. Checked on every PR so it never gets that far.
   version:
     name: Version
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,6 +139,8 @@ jobs:
   # worst time to learn it is broken. Throwaway keys, no secrets.
   signing:
     name: Linux signing
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,6 +148,8 @@ jobs:
 
   rust:
     name: Rust
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,6 +202,8 @@ jobs:
 
   web:
     name: Frontend
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -176,7 +231,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [dco, version, signing, rust, web]
+    needs: [dco, changes, version, signing, rust, web]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
@@ -188,7 +243,8 @@ jobs:
           needs = json.loads(os.environ["RESULTS"])
           for name, job in sorted(needs.items()):
               print(f"  {job['result']:>10}  {name}")
-          # dco is skipped on push; that is expected, not a failure.
+          # dco is skipped on push, and the app's jobs on a change that
+          # only touches website/; both are expected, not failures.
           failed = sorted(
               n for n, j in needs.items()
               if j["result"] not in ("success", "skipped")

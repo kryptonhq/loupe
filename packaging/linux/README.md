@@ -5,7 +5,7 @@ signature beside it, named after the file with `.asc` appended.
 
 The public key is [`loupe-release.asc`](loupe-release.asc) in this
 directory, and the same key is published on the
-[Loupe documentation](https://www.kryptonhq.com/loupe/#verifying-a-download).
+[Loupe documentation](https://loupe.kryptonhq.com/docs/installation#verifying-a-download).
 Check the fingerprint against both before trusting it.
 
 Fingerprint:

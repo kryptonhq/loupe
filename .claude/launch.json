@@ -4,8 +4,24 @@
     {
       "name": "loupe-ui",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
       "port": 1420
+    },
+    {
+      "name": "loupe-docs",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "website",
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3040"
+      ],
+      "port": 3040
     }
   ]
 }

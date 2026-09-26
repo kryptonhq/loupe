@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://loupe.kryptonhq.com"><strong>loupe.kryptonhq.com</strong></a> ·
+  <a href="https://loupe.kryptonhq.com/docs">Documentation</a> ·
+  <a href="https://github.com/kryptonhq/loupe/releases/latest">Download</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml"><img src="https://github.com/kryptonhq/loupe/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://codecov.io/gh/kryptonhq/loupe"><img src="https://codecov.io/gh/kryptonhq/loupe/branch/main/graph/badge.svg" alt="Coverage" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-blue.svg" alt="Apache 2.0" /></a>
