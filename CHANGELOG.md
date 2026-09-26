@@ -8,7 +8,7 @@ This file starts at 0.1.5. Earlier releases are on the
 [releases page](https://github.com/kryptonhq/loupe/releases); 0.1.3 and
 0.1.4 exist only as version bumps and were never published.
 
-## [Unreleased]
+## [0.1.7] — 2026-09-26
 
 ### Added
 
