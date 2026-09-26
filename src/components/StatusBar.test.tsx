@@ -159,6 +159,31 @@ describe("StatusBar updates", () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
+  it("answers a check that found nothing, without inviting a click", () => {
+    setup("open", { status: "current" });
+    expect(screen.getByRole("status")).toHaveTextContent("Loupe is up to date");
+    expect(screen.queryByRole("button", { name: /up to date/ })).not.toBeInTheDocument();
+  });
+
+  it("says a check is running, without inviting a second one", () => {
+    setup("open", { status: "checking" });
+    expect(screen.getByRole("status")).toHaveTextContent("Checking for updates…");
+    expect(screen.queryByRole("button", { name: /Checking/ })).not.toBeInTheDocument();
+  });
+
+  it("says why a check failed, and asks again on click", async () => {
+    const { user, onUpdate } = setup("open", {
+      status: "unreachable",
+      message: "network unreachable",
+    });
+    const cell = screen.getByRole("button", { name: /Could not check for updates/ });
+    expect(cell.className).toContain("text-danger");
+    expect(cell).toHaveAttribute("title", "network unreachable — click to try again");
+
+    await user.click(cell);
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
   it("shows the release notes as the tooltip when there are some", () => {
     setup("open", {
       status: "available",

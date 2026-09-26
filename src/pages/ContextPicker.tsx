@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "../components/Logo";
 import { Chip } from "../components/Chip";
 import { SkeletonBlock } from "../components/Skeleton";
+import { UpdateCell } from "../components/StatusBar";
 import { dragRegionProps } from "../lib/window";
+import type { UpdateState } from "../lib/update";
 import {
   indexContexts,
   partitionContexts,
@@ -59,12 +61,23 @@ export function ContextPicker({
   current,
   onConnected,
   onCancel,
+  update = { status: "idle" },
+  onUpdate = () => {},
+  onCheckForUpdates,
 }: {
   /// Set when switching from a live connection, so the active context
   /// can be marked and the screen can be dismissed.
   current?: ClusterInfo | null;
   onConnected: () => void;
   onCancel?: () => void;
+  /// The same update the status bar shows. Here too because there is no
+  /// status bar until something connects — and a release that fixes
+  /// connecting is exactly the one someone on this screen needs.
+  update?: UpdateState;
+  onUpdate?: () => void;
+  /// Ask now. The macOS menu has this too; Windows and Linux have no
+  /// menu, and this screen is the one place all three share.
+  onCheckForUpdates?: () => void;
 }) {
   const [contexts, setContexts] = useState<ContextInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -198,6 +211,21 @@ export function ContextPicker({
               ? "Switch to another cluster."
               : "Choose a cluster to connect to."}
           </p>
+          {update.status === "idle" && onCheckForUpdates ? (
+            // Quiet until wanted: most launches have nothing to find.
+            <button
+              onClick={onCheckForUpdates}
+              className="mt-3 rounded-sm px-2.5 py-1 text-xs text-content-muted transition-colors duration-150 ease-swift hover:bg-content/[0.05] hover:text-content-secondary"
+            >
+              Check for updates
+            </button>
+          ) : (
+            <UpdateCell
+              state={update}
+              onUpdate={onUpdate}
+              className="mt-3 flex items-center gap-2 rounded-sm px-2.5 py-1 text-xs"
+            />
+          )}
         </div>
 
         {error && (
