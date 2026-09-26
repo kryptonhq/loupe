@@ -252,8 +252,8 @@ describe("App workspace", () => {
     await openPod(user);
 
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
-    expect(within(crumbs).getByTitle(/Go to Pods/)).toBeInTheDocument();
-    expect(within(crumbs).getByTitle(/Go to Namespace prod/)).toBeInTheDocument();
+    expect(within(crumbs).getByTitle("Go to Pods")).toBeInTheDocument();
+    expect(within(crumbs).getByTitle("Go to Pods in prod")).toBeInTheDocument();
     expect(within(crumbs).queryByTitle(/Nodes/)).not.toBeInTheDocument();
   });
 
@@ -286,9 +286,24 @@ describe("App workspace", () => {
     await openPod(user);
 
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
-    await user.click(within(crumbs).getByTitle(/Go to Pods/));
+    await user.click(within(crumbs).getByTitle("Go to Pods"));
 
     expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
+  });
+
+  it("goes to the listing scoped to the namespace from its crumb", async () => {
+    // Not the Namespace's own page: "Pods › prod" reads as the pods in
+    // prod, so that is where the click lands.
+    const user = renderApp();
+    await screen.findByRole("heading", { name: "Nodes" });
+    await openPod(user);
+    vi.mocked(api.listPods).mockClear();
+
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    await user.click(within(crumbs).getByTitle("Go to Pods in prod"));
+
+    expect(await screen.findByRole("heading", { name: "Pods" })).toBeInTheDocument();
+    await waitFor(() => expect(api.listPods).toHaveBeenCalledWith("prod"));
   });
 
   it("hides the bar on a listing opened fresh, where it would only repeat the heading", async () => {

@@ -227,6 +227,12 @@ export interface Crumb {
 ///
 /// So the crumbs are derived from the current route alone — its kind's
 /// listing, its namespace, and itself.
+///
+/// The namespace crumb is that same listing scoped to the namespace, not
+/// the namespace's own page. Standing on a Deployment, "Deployments ›
+/// payments" reads as "the Deployments in payments", and that is where
+/// the click is expected to land; the Namespace object is a different
+/// place, reached from the Namespaces listing.
 export function crumbsFor(route: Route): Crumb[] {
   const at = (r: Route, current: boolean): Crumb => ({
     label: routeLabel(r),
@@ -234,7 +240,11 @@ export function crumbsFor(route: Route): Crumb[] {
     route: current ? null : r,
   });
   const here = at(route, true);
-  const namespaceOf = (name: string) => at({ type: "namespace", name }, false);
+  const namespaceOf = (listing: Route, namespace: string): Crumb => ({
+    label: namespace,
+    title: `${routeLabel(listing)} in ${namespace}`,
+    route: withListView(listing, { namespace }),
+  });
 
   switch (route.type) {
     case "node":
@@ -244,17 +254,25 @@ export function crumbsFor(route: Route): Crumb[] {
       return [at({ type: "namespaces" }, false), here];
 
     case "pod":
-      return [at({ type: "pods" }, false), namespaceOf(route.namespace), here];
+      return [
+        at({ type: "pods" }, false),
+        namespaceOf({ type: "pods" }, route.namespace),
+        here,
+      ];
 
     case "release":
-      return [at({ type: "helm" }, false), namespaceOf(route.namespace), here];
+      return [
+        at({ type: "helm" }, false),
+        namespaceOf({ type: "helm" }, route.namespace),
+        here,
+      ];
 
     case "object": {
       const listing: Route = { type: "kind", entry: kindEntryFor(route.resource) };
       // Cluster-scoped objects have no namespace to sit in, and an empty
       // crumb between the kind and the name would only be noise.
       return route.namespace
-        ? [at(listing, false), namespaceOf(route.namespace), here]
+        ? [at(listing, false), namespaceOf(listing, route.namespace), here]
         : [at(listing, false), here];
     }
 

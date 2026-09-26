@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { NotLive } from "../components/NotLive";
 import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
 import { Chip, ChipList } from "../components/Chip";
@@ -7,11 +8,20 @@ import { Select } from "../components/Select";
 import { StatusDot, phaseTone } from "../components/StatusDot";
 import {
   api,
+  type GvkRef,
   type NamespaceSummary,
   type NodeSummary,
   type PodSummary,
 } from "../lib/api";
 import type { ListView, OpenIntent } from "../lib/routes";
+import { useWatch } from "../lib/useWatch";
+
+// Kept fresh by a watch on the kind each one lists, the way every
+// server-printed listing already was. These three had been left out, so
+// a crashing pod sat at Running until someone pressed refresh.
+const NODE: GvkRef = { group: "", version: "v1", kind: "Node" };
+const NAMESPACE: GvkRef = { group: "", version: "v1", kind: "Namespace" };
+const POD: GvkRef = { group: "", version: "v1", kind: "Pod" };
 
 // The three listings that have a view of their own rather than a
 // server-printed table.
@@ -42,6 +52,7 @@ export function Nodes({ onOpen, view, onView }: ListProps<NodeSummary>) {
     queryKey: ["nodes"],
     queryFn: () => api.listNodes(),
   });
+  const watch = useWatch(NODE, null, ["nodes"]);
 
   const columns: Column<NodeSummary>[] = [
     { key: "name", header: "Name", render: (n) => n.name, sortValue: (n) => n.name },
@@ -88,6 +99,7 @@ export function Nodes({ onOpen, view, onView }: ListProps<NodeSummary>) {
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
+      actions={<NotLive watch={watch} />}
     >
       <ResourceTable
         columns={columns}
@@ -109,6 +121,7 @@ export function Namespaces({ onOpen, view, onView }: ListProps<NamespaceSummary>
     queryKey: ["namespaces"],
     queryFn: () => api.listNamespaces(),
   });
+  const watch = useWatch(NAMESPACE, null, ["namespaces"]);
 
   const columns: Column<NamespaceSummary>[] = [
     { key: "name", header: "Name", render: (n) => n.name, sortValue: (n) => n.name },
@@ -138,6 +151,7 @@ export function Namespaces({ onOpen, view, onView }: ListProps<NamespaceSummary>
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
+      actions={<NotLive watch={watch} />}
     >
       <ResourceTable
         columns={columns}
@@ -166,6 +180,7 @@ export function Pods({ onOpen, view, onView }: ListProps<PodSummary>) {
     // load, so switching namespace does not flash an empty table.
     placeholderData: (prev) => prev,
   });
+  const watch = useWatch(POD, namespace || null, ["pods", namespace]);
 
   const namespaces = useQuery({
     queryKey: ["namespaces"],
@@ -232,6 +247,7 @@ export function Pods({ onOpen, view, onView }: ListProps<PodSummary>) {
       error={pods.error}
       isFetching={pods.isFetching && !pods.isLoading}
       onRefresh={() => pods.refetch()}
+      actions={<NotLive watch={watch} />}
     >
       <ResourceTable
         columns={columns}

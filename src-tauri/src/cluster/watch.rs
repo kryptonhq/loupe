@@ -109,6 +109,7 @@ pub async fn start(
     watches: &'static Watches,
     gvk: GvkRef,
     namespace: Option<String>,
+    label_selector: Option<String>,
     sink: impl WatchSink,
 ) -> Result<u64> {
     let (resource, caps) = resolve(session, &gvk).await?;
@@ -127,7 +128,7 @@ pub async fn start(
         // off on repeated failures rather than hot-looping against the
         // API server. Reimplementing that here would be the same code
         // with fewer eyes on it.
-        let stream = watcher(api, watcher::Config::default());
+        let stream = watcher(api, config_for(label_selector.as_deref()));
         futures::pin_mut!(stream);
 
         while let Some(event) = stream.next().await {
@@ -147,6 +148,16 @@ pub async fn start(
 
     watches.active.lock().await.insert(id, task.abort_handle());
     Ok(id)
+}
+
+/// The watcher's settings. A label selector narrows it server-side, so a
+/// listing built from a slice of a kind — Helm's release Secrets — is not
+/// woken by every other object of that kind.
+fn config_for(label_selector: Option<&str>) -> watcher::Config {
+    match label_selector {
+        Some(selector) if !selector.is_empty() => watcher::Config::default().labels(selector),
+        _ => watcher::Config::default(),
+    }
 }
 
 /// Turns one watcher event into something the frontend can act on, or
@@ -276,7 +287,7 @@ mod tests {
         };
 
         assert!(matches!(
-            start(&session, watches(), gvk, None, Discard).await,
+            start(&session, watches(), gvk, None, None, Discard).await,
             Err(crate::error::AppError::NotConnected)
         ));
     }
@@ -313,6 +324,141 @@ mod tests {
         for id in ids {
             assert!(!watches.stop(id).await, "registry should be empty");
         }
+    }
+
+    struct Forward(std::sync::mpsc::Sender<WatchEvent>);
+    impl WatchSink for Forward {
+        fn send(&self, event: WatchEvent) -> bool {
+            self.0.send(event).is_ok()
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live cluster; set LOUPE_TEST_CONTEXT"]
+    async fn a_live_change_reaches_the_sink() {
+        let session = crate::cluster::live::session().await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let gvk = GvkRef {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "ConfigMap".into(),
+        };
+        let id = start(
+            &session,
+            watches_live(),
+            gvk,
+            Some("default".into()),
+            None,
+            Forward(tx),
+        )
+        .await
+        .unwrap();
+
+        // Let the initial list finish, so the change below is a delta.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let api: Api<k8s_openapi::api::core::v1::ConfigMap> =
+            Api::namespaced(session.client().await.unwrap(), "default");
+        let name = format!("loupe-watch-{}", std::process::id());
+        let cm = k8s_openapi::api::core::v1::ConfigMap {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        api.create(&Default::default(), &cm).await.unwrap();
+
+        let got = tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+        })
+        .await
+        .unwrap();
+        let _ = api.delete(&name, &Default::default()).await;
+        watches_live().stop(id).await;
+
+        match got {
+            Ok(WatchEvent::Changed { name: n, .. }) => assert_eq!(n, name),
+            other => panic!("expected the create to arrive, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a live cluster; set LOUPE_TEST_CONTEXT"]
+    async fn a_live_selector_ignores_objects_without_the_label() {
+        use k8s_openapi::api::core::v1::Secret;
+        let session = crate::cluster::live::session().await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let gvk = GvkRef {
+            group: "".into(),
+            version: "v1".into(),
+            kind: "Secret".into(),
+        };
+        let id = start(
+            &session,
+            watches_live(),
+            gvk,
+            Some("default".into()),
+            Some("owner=helm".into()),
+            Forward(tx),
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let api: Api<Secret> = Api::namespaced(session.client().await.unwrap(), "default");
+        let secret = |name: &str, helm: bool| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.into()),
+                labels: helm.then(|| [("owner".to_string(), "helm".to_string())].into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let pid = std::process::id();
+        let (plain, helm) = (format!("loupe-plain-{pid}"), format!("loupe-helm-{pid}"));
+        api.create(&Default::default(), &secret(&plain, false))
+            .await
+            .unwrap();
+        api.create(&Default::default(), &secret(&helm, true))
+            .await
+            .unwrap();
+
+        let got = tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+        })
+        .await
+        .unwrap();
+        let _ = api.delete(&plain, &Default::default()).await;
+        let _ = api.delete(&helm, &Default::default()).await;
+        watches_live().stop(id).await;
+
+        // The first event is the labelled one: the plain Secret, created
+        // first, never reached the sink.
+        match got {
+            Ok(WatchEvent::Changed { name, .. }) => assert_eq!(name, helm),
+            other => panic!("expected the labelled secret, got {other:?}"),
+        }
+    }
+
+    fn watches_live() -> &'static Watches {
+        static W: std::sync::OnceLock<Watches> = std::sync::OnceLock::new();
+        W.get_or_init(Watches::default)
+    }
+
+    #[test]
+    fn a_label_selector_narrows_the_watch() {
+        assert_eq!(
+            config_for(Some("owner=helm")).label_selector.as_deref(),
+            Some("owner=helm")
+        );
+    }
+
+    #[test]
+    fn no_selector_watches_everything() {
+        assert!(config_for(None).label_selector.is_none());
+        // An empty string from the frontend means the same, not a
+        // selector that matches nothing.
+        assert!(config_for(Some("")).label_selector.is_none());
     }
 
     #[test]

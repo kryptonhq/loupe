@@ -196,6 +196,40 @@ describe("crumbsFor", () => {
     ).toEqual(["Helm", "monitoring", "[prom]"]);
   });
 
+  it("sends the namespace crumb to the listing scoped to it", () => {
+    // The reported bug: on Deployments › olympify › olympify-api, the
+    // "olympify" crumb opened the Namespace's own page. It reads as "the
+    // Deployments in olympify", so that is where it goes.
+    const [, ns] = crumbsFor({
+      type: "object",
+      resource: entry.gvk,
+      namespace: "olympify",
+      name: "olympify-api",
+    });
+    expect(ns.label).toBe("olympify");
+    expect(ns.title).toBe("Deployments in olympify");
+    expect(ns.route).toEqual({
+      type: "kind",
+      entry: expect.objectContaining({ id: "apps/v1/Deployment" }),
+      view: { namespace: "olympify" },
+    });
+  });
+
+  it("scopes Pods and Helm the same way", () => {
+    expect(crumbsFor({ type: "pod", namespace: "prod", name: "web" })[1].route).toEqual({
+      type: "pods",
+      view: { namespace: "prod" },
+    });
+    expect(
+      crumbsFor({ type: "release", namespace: "monitoring", name: "prom" })[1].route,
+    ).toEqual({ type: "helm", view: { namespace: "monitoring" } });
+  });
+
+  it("leaves the kind crumb unscoped, so it still means every namespace", () => {
+    const [kind] = crumbsFor({ type: "pod", namespace: "prod", name: "web" });
+    expect(kind.route).toEqual({ type: "pods" });
+  });
+
   it("gives a listing one crumb, because nothing sits above it", () => {
     expect(crumbs({ type: "pods" })).toEqual(["[Pods]"]);
     expect(crumbs({ type: "kind", entry })).toEqual(["[Deployments]"]);

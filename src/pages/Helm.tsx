@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { NotLive } from "../components/NotLive";
 import { Panel } from "../components/Panel";
 import { ResourceTable } from "../components/ResourceTable";
 import { type Column } from "../components/Table";
@@ -17,6 +18,12 @@ import {
   type ReleaseSummary,
 } from "../lib/api";
 import type { ListView, OpenIntent } from "../lib/routes";
+import { useWatch } from "../lib/useWatch";
+
+/// Where Helm keeps releases, and the label on its Secrets. Watching
+/// only those keeps an unrelated Secret from refetching the list.
+const SECRET = { group: "", version: "v1", kind: "Secret" };
+const RELEASE_SECRETS = "owner=helm";
 
 // Helm releases, read out of the release Secrets rather than the CLI.
 //
@@ -197,6 +204,13 @@ export function Helm({
     queryFn: () => api.listHelmReleases(namespace || undefined),
     placeholderData: (prev) => prev,
   });
+  const watch = useWatch(
+    SECRET,
+    namespace || null,
+    ["helm-releases", namespace],
+    true,
+    RELEASE_SECRETS,
+  );
 
   const namespaces = useQuery({
     queryKey: ["namespaces"],
@@ -234,6 +248,7 @@ export function Helm({
       error={q.error}
       isFetching={q.isFetching && !q.isLoading}
       onRefresh={() => q.refetch()}
+      actions={<NotLive watch={watch} />}
     >
       <ResourceTable
         columns={columns}

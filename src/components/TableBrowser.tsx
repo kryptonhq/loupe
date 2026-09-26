@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { NotLive } from "./NotLive";
 import { Panel } from "./Panel";
 import { ResourceTable } from "./ResourceTable";
 import { type Column } from "./Table";
@@ -161,16 +162,7 @@ export function TableBrowser({
       onRefresh={() => q.refetch()}
       actions={
         <>
-          {/* Said out loud when it is not: a listing that has quietly
-              stopped updating is worse than one that admits it. */}
-          {watch.error && (
-            <span
-              className="shrink-0 text-2xs text-warn"
-              title={`${watch.error} — the listing still works, but will not update by itself`}
-            >
-              not live
-            </span>
-          )}
+          <NotLive watch={watch} />
           {actions}
         </>
       }

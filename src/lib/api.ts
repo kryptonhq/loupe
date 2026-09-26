@@ -710,7 +710,14 @@ export const api = {
     resource: GvkRef,
     namespace: string | null,
     channel: Channel<WatchEvent>,
-  ) => invoke<number>("start_watch", { resource, namespace, channel }),
+    labelSelector?: string,
+  ) =>
+    invoke<number>("start_watch", {
+      resource,
+      namespace,
+      labelSelector: labelSelector ?? null,
+      channel,
+    }),
   stopWatch: (id: number) => invoke<boolean>("stop_watch", { id }),
 
   /// Keeps the Problems view current. A snapshot arrives on `channel`
