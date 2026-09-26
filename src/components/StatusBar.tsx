@@ -98,42 +98,54 @@ function ProblemsCell({
   );
 }
 
-/// The update segment, or nothing.
-function UpdateCell({
+/// The update segment, or nothing. Exported for the context picker,
+/// which has no status bar and is where someone who cannot connect is
+/// looking — `className` swaps the status-bar cell framing for its own.
+export function UpdateCell({
   state,
   onUpdate,
+  className = CELL,
 }: {
   state: UpdateState;
   onUpdate: () => void;
+  className?: string;
 }) {
   const summary = updateSummary(state);
   if (!summary) return null;
 
   const action = updateAction(state);
   const tone =
-    state.status === "failed"
+    state.status === "failed" || state.status === "unreachable"
       ? "text-danger"
-      : state.status === "downloading"
+      : state.status === "downloading" ||
+          state.status === "checking" ||
+          state.status === "current"
         ? "text-content-secondary"
         : "text-accent";
 
-  // Not a button while it is downloading: there is nothing a second
-  // click could usefully do, and an inert button invites one.
+  // Not a button while it is downloading or checking: there is nothing a
+  // second click could usefully do, and an inert button invites one.
   if (!action) {
-    return <span className={`${CELL} ${tone}`}>{summary}</span>;
+    return (
+      <span role="status" className={`${className} ${tone}`}>
+        {summary}
+      </span>
+    );
   }
 
   return (
     <button
       onClick={onUpdate}
       title={
-        state.status === "available" && state.notes
-          ? state.notes
-          : "Loupe updates itself; nothing else on the machine changes"
+        state.status === "unreachable"
+          ? `${state.message} — click to try again`
+          : state.status === "available" && state.notes
+            ? state.notes
+            : "Loupe updates itself; nothing else on the machine changes"
       }
-      className={`${CELL} ${tone} font-medium transition-colors duration-150 ease-swift hover:bg-content/[0.05]`}
+      className={`${className} ${tone} font-medium transition-colors duration-150 ease-swift hover:bg-content/[0.05]`}
     >
-      <span aria-hidden>⇩</span>
+      <span aria-hidden>{state.status === "unreachable" ? "↻" : "⇩"}</span>
       {summary}
     </button>
   );

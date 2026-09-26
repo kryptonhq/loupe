@@ -28,7 +28,9 @@ import { api, type ClusterInfo, type Guard } from "./lib/api";
 import { ClusterContext } from "./lib/clusterContext";
 import { applyTheme, isDark, parseTheme, type Theme } from "./lib/theme";
 import {
+  CHECK_UPDATES_EVENT,
   checkForUpdate,
+  checkNow,
   percentOf,
   restart,
   type PendingUpdate,
@@ -73,6 +75,10 @@ import {
   type Workspace,
 } from "./lib/workspace";
 
+
+/// How long "Loupe is up to date" stays after a check that found nothing.
+const UP_TO_DATE_MS = 4000;
+
 export default function App() {
   const [cluster, setCluster] = useState<ClusterInfo | null>(null);
 
@@ -108,6 +114,9 @@ export default function App() {
   // installs it, kept out of render state because it is not display data.
   const [update, setUpdate] = useState<UpdateState>({ status: "idle" });
   const pending = useRef<PendingUpdate | null>(null);
+  // The menu's listener is registered once; this keeps it calling the
+  // current check rather than the one from the first render.
+  const checkNowRef = useRef<() => Promise<void>>(async () => {});
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -195,6 +204,16 @@ export default function App() {
     // enough to remove one.
     return () => void unlisten.then((off) => off?.()).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Loupe › Check for Updates…. From the menu because the menu is there
+  // on every screen — the context picker included, which is where
+  // someone stuck on a connection bug is waiting for the fix.
+  useEffect(() => {
+    const unlisten = listen(CHECK_UPDATES_EVENT, () => {
+      void checkNowRef.current();
+    }).catch(() => null);
+    return () => void unlisten.then((off) => off?.()).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -373,7 +392,7 @@ export default function App() {
       group: "Action",
       label: "Check for updates",
       keywords: "version upgrade new release",
-      run: () => void lookForUpdate(),
+      run: () => void checkForUpdatesNow(),
     });
     out.push({
       id: "action:shortcuts",
@@ -492,11 +511,50 @@ export default function App() {
     setUpdate({ status: "available", version: found.version, notes: found.notes });
   }
 
+  /// A check the user asked for. Unlike the one on launch it always
+  /// answers — newer, up to date, or why it could not tell. An update
+  /// already found, downloading or ready is left alone: asking again
+  /// should not throw away progress, and it is already on screen.
+  async function checkForUpdatesNow() {
+    if (
+      update.status === "available" ||
+      update.status === "downloading" ||
+      update.status === "ready"
+    ) {
+      return;
+    }
+
+    setUpdate({ status: "checking" });
+    const result = await checkNow();
+    if (result.kind === "available") {
+      pending.current = result.update;
+      setUpdate({
+        status: "available",
+        version: result.update.version,
+        notes: result.update.notes,
+      });
+    } else if (result.kind === "current") {
+      setUpdate({ status: "current" });
+      // Answers the question, then gets out of the way.
+      setTimeout(
+        () => setUpdate((now) => (now.status === "current" ? { status: "idle" } : now)),
+        UP_TO_DATE_MS,
+      );
+    } else {
+      setUpdate({ status: "unreachable", message: result.message });
+    }
+  }
+  checkNowRef.current = checkForUpdatesNow;
+
   /// Whatever the update segment offers next: install it, restart into
-  /// it, or try again after a failure.
+  /// it, try again after a failure, or ask again when asking failed.
   async function advanceUpdate() {
     if (update.status === "ready") {
       await restart();
+      return;
+    }
+    if (update.status === "unreachable") {
+      await checkForUpdatesNow();
       return;
     }
 
@@ -596,6 +654,9 @@ export default function App() {
         current={cluster}
         onConnected={onConnected}
         onCancel={cluster ? () => setSwitching(false) : undefined}
+        update={update}
+        onUpdate={() => void advanceUpdate()}
+        onCheckForUpdates={() => void checkForUpdatesNow()}
       />
     );
   }
