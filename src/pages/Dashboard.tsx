@@ -865,7 +865,6 @@ function NamespacesCard({
   blockedBy: string | null;
   open: Open;
 }) {
-  const top = overview.namespaces[0]?.pods ?? 0;
   return (
     <Card
       title="Namespaces by pods"
@@ -882,7 +881,7 @@ function NamespacesCard({
         <Empty>No pods in any namespace.</Empty>
       ) : (
         <ul className="-mx-2">
-          {overview.namespaces.map((n) => (
+          {overview.namespaces.map((n, _, all) => (
             <li key={n.namespace}>
               <button
                 onClick={(e) =>
@@ -897,7 +896,9 @@ function NamespacesCard({
                 <span className="h-1.5 w-full overflow-hidden rounded-full bg-accent/10" aria-hidden>
                   <span
                     className="block h-full rounded-full bg-accent"
-                    style={{ width: `${top ? (n.pods / top) * 100 : 0}%` }}
+                    // Largest first, and a namespace is only listed
+                    // because it has pods, so the first is never zero.
+                    style={{ width: `${(n.pods / all[0].pods) * 100}%` }}
                   />
                 </span>
                 <span className="text-right font-mono text-2xs tabular-nums text-content-secondary">

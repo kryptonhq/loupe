@@ -195,6 +195,12 @@ fn workloads_count_healthy_by_what_each_kind_promises() {
             "currentNumberScheduled": 3, "numberMisscheduled": 0, "numberReady": 3
         }
     }));
+    // Not yet reconciled: no status at all. Not healthy, since nothing
+    // says it is running anywhere.
+    let fresh_ds: DaemonSet = parse(json!({
+        "metadata": { "name": "fresh", "namespace": "a" },
+        "spec": { "selector": {}, "template": {} }
+    }));
     let failed_job: Job = parse(json!({
         "metadata": { "name": "migrate", "namespace": "a" },
         "spec": { "template": {} },
@@ -213,7 +219,7 @@ fn workloads_count_healthy_by_what_each_kind_promises() {
     let o = summarise(&Snapshot {
         deployments: vec![&ok, &short, &scaled_to_zero],
         statefulsets: vec![&sts],
-        daemonsets: vec![&ds],
+        daemonsets: vec![&ds, &fresh_ds],
         jobs: vec![&failed_job, &ok_job],
         cronjobs: vec![&suspended],
         ..Default::default()
@@ -226,7 +232,7 @@ fn workloads_count_healthy_by_what_each_kind_promises() {
         (get("StatefulSet").healthy, get("StatefulSet").total),
         (0, 1)
     );
-    assert_eq!((get("DaemonSet").healthy, get("DaemonSet").total), (1, 1));
+    assert_eq!((get("DaemonSet").healthy, get("DaemonSet").total), (1, 2));
     assert_eq!((get("Job").healthy, get("Job").total), (1, 2));
     assert_eq!((get("CronJob").healthy, get("CronJob").total), (0, 1));
 }
