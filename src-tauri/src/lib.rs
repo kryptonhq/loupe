@@ -553,6 +553,15 @@ async fn stop_problems(id: u64) -> Result<bool> {
     Ok(problem_monitors().stop(id).await)
 }
 
+/// Live CPU and memory use per node, or why there is none — usually
+/// that metrics-server is not installed.
+#[tauri::command]
+async fn node_usage(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<cluster::metrics::UsageAnswer> {
+    cluster::metrics::node_usage(session.inner()).await
+}
+
 /// Finds objects of any kind by a fragment of their name, from an index
 /// built in the background. Answers from what is indexed so far and
 /// never waits on the cluster; the response says how complete that is.
@@ -738,6 +747,7 @@ pub fn run() {
             stop_watch,
             start_problems,
             stop_problems,
+            node_usage,
             search_objects,
             start_forward,
             list_forwards,

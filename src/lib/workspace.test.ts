@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Route } from "./routes";
+import { HOME, type Route } from "./routes";
 import {
   activeTab,
   canGoBack,
@@ -17,7 +17,8 @@ import {
 } from "./workspace";
 
 const pods: Route = { type: "pods" };
-const nodes: Route = { type: "nodes" };
+/// Where a new workspace starts.
+const home: Route = HOME;
 const helm: Route = { type: "helm" };
 
 function pod(name: string): Route {
@@ -35,7 +36,7 @@ describe("newWorkspace", () => {
   it("starts with one tab on the home route", () => {
     const ws = newWorkspace();
     expect(ws.tabs).toHaveLength(1);
-    expect(currentRoute(ws)).toEqual(nodes);
+    expect(currentRoute(ws)).toEqual(home);
   });
 });
 
@@ -44,7 +45,7 @@ describe("navigate", () => {
     let ws = newWorkspace();
     ws = navigate(ws, pods);
     ws = navigate(ws, pod("api-1"));
-    expect(labels(ws)).toEqual(["nodes", "pods", "api-1"]);
+    expect(labels(ws)).toEqual(["dashboard", "pods", "api-1"]);
     expect(currentRoute(ws)).toEqual(pod("api-1"));
   });
 
@@ -62,7 +63,7 @@ describe("navigate", () => {
     ws = navigate(ws, pod("api-1"));
     ws = goBack(ws);
     ws = navigate(ws, helm);
-    expect(labels(ws)).toEqual(["nodes", "pods", "helm"]);
+    expect(labels(ws)).toEqual(["dashboard", "pods", "helm"]);
     expect(canGoForward(activeTab(ws))).toBe(false);
   });
 
@@ -70,7 +71,7 @@ describe("navigate", () => {
     let ws = newWorkspace();
     ws = openInNewTab(ws, pods);
     ws = navigate(ws, helm);
-    expect(ws.tabs[0].history).toEqual([nodes]);
+    expect(ws.tabs[0].history).toEqual([home]);
   });
 });
 
@@ -127,7 +128,7 @@ describe("selectTab", () => {
     const first = ws.tabs[0].id;
     ws = openInNewTab(ws, pods);
     ws = selectTab(ws, first);
-    expect(currentRoute(ws)).toEqual(nodes);
+    expect(currentRoute(ws)).toEqual(home);
   });
 
   it("ignores a tab that is not open", () => {
@@ -138,7 +139,7 @@ describe("selectTab", () => {
   it("selects by position, and ignores one past the end", () => {
     let ws = newWorkspace();
     ws = openInNewTab(ws, pods);
-    expect(currentRoute(selectIndex(ws, 0))).toEqual(nodes);
+    expect(currentRoute(selectIndex(ws, 0))).toEqual(home);
     expect(selectIndex(ws, 9)).toBe(ws);
   });
 });
@@ -158,7 +159,7 @@ describe("closeTab", () => {
     let ws = newWorkspace();
     ws = openInNewTab(ws, pods);
     ws = closeActiveTab(ws);
-    expect(currentRoute(ws)).toEqual(nodes);
+    expect(currentRoute(ws)).toEqual(home);
   });
 
   it("keeps the active tab when a different one is closed", () => {
@@ -175,7 +176,7 @@ describe("closeTab", () => {
     ws = navigate(ws, helm);
     ws = closeActiveTab(ws);
     expect(ws.tabs).toHaveLength(1);
-    expect(currentRoute(ws)).toEqual(nodes);
+    expect(currentRoute(ws)).toEqual(home);
     expect(canGoBack(activeTab(ws))).toBe(false);
   });
 

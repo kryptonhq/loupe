@@ -19,6 +19,7 @@ import { ObjectDetail } from "./pages/ObjectDetail";
 import { Crds } from "./pages/Crds";
 import { KindBrowser } from "./pages/KindBrowser";
 import { Helm, ReleaseDetail } from "./pages/Helm";
+import { Dashboard } from "./pages/Dashboard";
 import { Problems } from "./pages/Problems";
 import { badgeCount, routeForProblem } from "./lib/problems";
 import { routeForObject } from "./lib/routes";
@@ -248,6 +249,12 @@ export default function App() {
         run: () => jump(to),
       });
 
+    goTo(
+      "Dashboard",
+      { type: "dashboard" },
+      undefined,
+      "overview home summary cluster health capacity cpu memory usage",
+    );
     goTo(
       "Problems",
       { type: "problems" },
@@ -641,6 +648,7 @@ export default function App() {
                 back={back}
                 onView={changeView}
                 problems={problems}
+                cluster={cluster}
               />
             </div>
           </main>
@@ -691,16 +699,21 @@ function View({
   back,
   onView,
   problems,
+  cluster,
 }: {
   route: Route;
   open: (route: Route, intent?: OpenIntent) => void;
   back: () => void;
   onView: (patch: Partial<ListView>) => void;
   problems: ProblemsState;
+  cluster: ClusterInfo | null;
 }) {
   const view = listViewOf(route);
 
   switch (route.type) {
+    case "dashboard":
+      return <Dashboard state={problems} cluster={cluster} open={open} />;
+
     case "problems":
       return (
         <Problems

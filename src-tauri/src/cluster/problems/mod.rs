@@ -143,6 +143,10 @@ pub struct ProblemsSnapshot {
     pub generated_at: i64,
     pub grace_seconds: i64,
     pub restart_threshold: i32,
+    /// The dashboard's counts, from the same store. Carried here rather
+    /// than fetched so the dashboard is exactly as live as this view and
+    /// costs the cluster nothing extra.
+    pub overview: crate::cluster::overview::Overview,
 }
 
 pub trait ProblemsSink: Send + Sync + 'static {
@@ -275,6 +279,7 @@ impl Store {
             .collect::<Vec<_>>();
         problems.extend(sources.iter().filter_map(unavailable_row));
         rules::sort(&mut problems);
+        let overview = crate::cluster::overview::summarise(&self.view());
 
         ProblemsSnapshot {
             problems,
@@ -282,6 +287,7 @@ impl Store {
             generated_at: now,
             grace_seconds: limits.grace_seconds,
             restart_threshold: limits.restart_threshold,
+            overview,
         }
     }
 

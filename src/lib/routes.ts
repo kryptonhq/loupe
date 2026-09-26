@@ -32,6 +32,7 @@ export interface ListView {
 }
 
 export type Route =
+  | { type: "dashboard" }
   | { type: "problems"; view?: ListView }
   | { type: "nodes"; view?: ListView }
   | { type: "namespaces"; view?: ListView }
@@ -51,8 +52,10 @@ export type Route =
     };
 
 /// The route the app opens on, and what a new tab starts at when there
-/// is nothing better to copy.
-export const HOME: Route = { type: "nodes" };
+/// is nothing better to copy. The dashboard, because the first question
+/// after connecting is "how is this cluster doing" — which it answers,
+/// problems included, at a glance.
+export const HOME: Route = { type: "dashboard" };
 
 /// How something was opened. Holding ⌘ or Ctrl asks for a tab of its
 /// own, the way it does on a link, so a list can be fanned out into
@@ -104,6 +107,8 @@ export function routeKey(route: Route): string {
 /// crumbs and by the detail view's own header.
 export function routeLabel(route: Route): string {
   switch (route.type) {
+    case "dashboard":
+      return "Dashboard";
     case "problems":
       return "Problems";
     case "nodes":
