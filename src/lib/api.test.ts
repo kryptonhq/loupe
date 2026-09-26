@@ -307,6 +307,9 @@ describe("0.1.5 command arguments", () => {
     await api.startWatch(resource, null, channel, "owner=helm");
     expect(lastCall().args).toMatchObject({ labelSelector: "owner=helm" });
 
+    await api.nodeUsage();
+    expect(lastCall()).toEqual({ command: "node_usage", args: undefined });
+
     await api.stopWatch(2);
     expect(lastCall()).toEqual({ command: "stop_watch", args: { id: 2 } });
 
